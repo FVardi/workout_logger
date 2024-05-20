@@ -7,65 +7,95 @@ import numpy as np
 
 class WorkoutTracker:
 
-    def __init__(self, date):
-        self.date = date
-        self.movement_list = []
-        self.hhr = False
-        self.standard_engine_day = False
+    def __init__(
+            self
+        ):
 
+        pass
 
-    def add_description(self, description, notes=''):
+    def add_heavy_day(
+            self,
+            date,
+            movement,
+            reference_rep_scheme,
+            weight,
+            true_rep_scheme=None
+        ):
 
-        self.description = description
-        self.notes = notes
-        self.workout_id = pd.read_pickle('main_log.pkl')['Workout id'].iloc[-1]+1
-
-
-    def add_heavy_day(self, movement, reference_rep_scheme, weight, true_rep_scheme=None):
-
-        self.workout_type = 'Heavy'
-
-        self.movement_list.append(movement)
-        self.rep_scheme = reference_rep_scheme
-        self.weight = weight
-
-        if true_rep_scheme is not None:
-            self.true_rep_scheme = true_rep_scheme
-        else:
-            self.true_rep_scheme = reference_rep_scheme
-
-        self.score = ''
-        self.time_domain = ''
-
-    def add_heavy_day_at_HHR(self, movement):
-
-        self.hhr = True
-        self.hhr_movement = movement
-
-    def add_standard_engine_day(self, movement, reference_rep_scheme, time_domain, score, true_rep_scheme=None):
-
-        self.standard_engine_day = True
-        self.workout_type = 'Engine'
-        self.movement_list.append(movement)
-        self.rep_scheme = reference_rep_scheme
-
-        if true_rep_scheme is not None:
-            self.true_rep_scheme = true_rep_scheme
-        else:
-            self.true_rep_scheme = reference_rep_scheme
+        if not hasattr(self, 'date'):
         
-        self.score = score
-        self.time_domain = time_domain
+            self.date = date
+            self.workout_id = pd.read_pickle('main_log.pkl')['Workout id'].iloc[-1]+1
 
-    def add_workout(self, movements, score, time_domain, heavy_day_at_hhr_movement=[]):
+            self.movement_list = []
+            self.standard_engine_day = False
+            self.workout_type = 'Heavy'
 
-        self.movement_list = movements
-        self.score = score
-        self.time_domain = time_domain
-        self.workout_type = 'Workout'
+            self.movement_list.append(movement)
+            self.rep_scheme = reference_rep_scheme
+            self.weight = weight
 
-        if len(heavy_day_at_hhr_movement) != 0:
-            
+            if true_rep_scheme is not None:
+                self.true_rep_scheme = true_rep_scheme
+            else:
+                self.true_rep_scheme = reference_rep_scheme
+
+            self.time_domain = ''
+            self.description = ''
+            self.hhr_movement = []
+
+            self.log_workout()
+
+    def add_standard_engine_day(
+            self,
+            date,
+            movement,
+            reference_rep_scheme,
+            time_domain,
+            true_rep_scheme=None
+        ):
+
+        if not hasattr(self, 'date'):
+
+            self.date = date
+            self.movement_list = []
+            self.workout_id = pd.read_pickle('main_log.pkl')['Workout id'].iloc[-1]+1
+
+            self.standard_engine_day = True
+            self.workout_type = 'Engine'
+            self.movement_list.append(movement)
+            self.rep_scheme = reference_rep_scheme
+
+            if true_rep_scheme is not None:
+                self.true_rep_scheme = true_rep_scheme
+            else:
+                self.true_rep_scheme = reference_rep_scheme
+
+            self.time_domain = time_domain
+            self.hhr_movement = []
+
+            self.log_workout()
+
+    def add_workout(
+            self,
+            date,
+            description,
+            movements,
+            time_domain,
+            hhr_movement
+        ):
+
+        if not hasattr(self, 'date'):
+            self.date = date
+            self.movement_list = []
+            self.workout_id = pd.read_pickle('main_log.pkl')['Workout id'].iloc[-1]+1
+            self.movement_list = movements
+            self.description = description
+            self.time_domain = time_domain
+            self.workout_type = 'Workout'
+            self.hhr_movement = hhr_movement
+
+            self.log_workout()
 
     def log_workout(self):
 
@@ -76,8 +106,6 @@ class WorkoutTracker:
             'Workout id': [self.workout_id],
             'Description': [self.description],
             'Workout type': [self.workout_type],
-            'Notes': [self.notes],
-            'Score': [self.score],
             'Time domain': [self.time_domain],
             'Weightlifting': [0],
             'Monostructural': [0],
@@ -87,7 +115,8 @@ class WorkoutTracker:
             'Below parallel': [0],
             'Upper body pull': [0],
             'Midline': [0],
-            'Engine': [0]})
+            'Engine': [0],
+            'Loaded carry': [0]})
         
         movement_gmp_dict = pickle.load(open('movement_gmp_dict.pkl', 'rb'))
         movement_modality_dict = pickle.load(open('movement_modality_dict.pkl', 'rb'))
@@ -101,7 +130,7 @@ class WorkoutTracker:
         self._update_df('main_log.pkl', main_df)
 
         # Save heavy day log
-        # Only if heavy day of HHR was logged
+        # Only if heavy day or HHR was logged
         if self.workout_type == 'Heavy':
 
             heavy_day_df = pd.DataFrame({
@@ -115,11 +144,11 @@ class WorkoutTracker:
             
             self._update_df('heavy_day_log.pkl', heavy_day_df)
 
-        if self.hhr == True:
+        if len(self.hhr_movement) != 0:
 
             heavy_day_df = pd.DataFrame({
                 'Date': [self.date],
-                'Movement': [self.movement_list],
+                'Movement': [self.hhr_movement],
                 'Type': ['HHR'],
                 'Rep scheme': '',
                 'Weight': '',
@@ -184,11 +213,12 @@ class WorkoutTracker:
         modality_dict = pickle.load(open('movement_modality_dict.pkl', 'rb'))
 
         gmp_reference = [
-            'Pull from ground',
+            'Pull from ground/hinge',
             'Pressing',
             'Below parallel',
             'Upper body pull',
             'Midline',
+            'Loaded carry',
             'Engine'
         ]
 
@@ -198,17 +228,15 @@ class WorkoutTracker:
             'Gymnastic'
         ]
 
-        if all(pattern in gmp_reference for pattern in gmp_list):
-            if add_or_delete == 'add':
-                gmp_dict[movement] = gmp_list
-            if add_or_delete == 'delete':
-                del gmp_dict[movement]
+        assert all(pattern in gmp_reference for pattern in gmp_list), 'Movement pattern not in list'
+        assert all(modality in modality_reference for modality in modality_list), 'Modality not in list'
 
-        if all(modality in modality_reference for modality in modality_list):
-            if add_or_delete == 'add':
-                modality_dict[movement] = modality_list
-            if add_or_delete == 'delete':
-                del modality_dict[movement]
+        if add_or_delete == 'add':
+            gmp_dict[movement] = gmp_list
+            modality_dict[movement] = modality_list
+        if add_or_delete == 'delete':
+            del gmp_dict[movement]
+            del modality_dict[movement]
 
         pickle.dump(gmp_dict, open('movement_gmp_dict.pkl', 'wb'))
         pickle.dump(modality_dict, open('movement_modality_dict.pkl', 'wb'))

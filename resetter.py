@@ -10,8 +10,6 @@ main_log_reset = pd.DataFrame(columns=[
     'Workout id',
     'Description',
     'Workout type',
-    'Notes',
-    'Score',
     'Time domain',
     'Weightlifting',
     'Monostructural',
@@ -22,7 +20,7 @@ main_log_reset = pd.DataFrame(columns=[
     'Upper body pull',
     'Midline',
     'Engine'],
-    data = np.zeros((1, 16))
+    data = np.zeros((1, 14))
 )
 
 
