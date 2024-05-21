@@ -1,3 +1,11 @@
 
+TODO
+- Add check when adding workouts to avoid mistakes
+- Base workout id on max number in dataframe
+- Start adding analysis features
+- Add accessory function
+
+
+DONE
 - Add check for correct addition of new movements
 
