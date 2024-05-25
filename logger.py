@@ -32,14 +32,12 @@ date = date.date()
 tracker = workout_tracker.WorkoutTracker()
 tracker.add_workout(
     date=date,
-    movements=['Air bike',
-               'T2B',
-               'Farmer walking lunges',
-               'Farmer walk',
-               'Double unders'],
-    description='2 hour fobbit',
-    time_domain='Long',
-    hhr_movement=['Farmer walking lunges']
+    movements=['HSPU',
+               'Sit up',
+               'Air squat'],
+    description='E4MOM x 4: 5 HSPUs, 10 sit ups, 15 air squats',
+    time_domain='Medium',
+    hhr_movement=[]
 )
 
 # %% ===============================
@@ -62,10 +60,10 @@ tracker.add_standard_engine_day(
 # ==================================
 tracker = workout_tracker.WorkoutTracker()
 tracker.modify_movement_dicts(
-    movement='Bench press',
+    movement='C2B',
     add_or_delete='add',
-    gmp_list=['Pressing'],
-    modality_list=['Weightlifting']
+    gmp_list=['Upper body pull'],
+    modality_list=['Gymnastic']
 )
 
 # Below parallel
