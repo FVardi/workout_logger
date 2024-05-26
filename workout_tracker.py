@@ -17,6 +17,7 @@ class WorkoutTracker:
             self,
             date,
             movement,
+            total_reps,
             reference_rep_scheme,
             weight,
             true_rep_scheme=None
@@ -34,6 +35,7 @@ class WorkoutTracker:
             self.movement_list.append(movement)
             self.rep_scheme = reference_rep_scheme
             self.weight = weight
+            self.total_reps = total_reps
 
             if true_rep_scheme is not None:
                 self.true_rep_scheme = true_rep_scheme
@@ -110,7 +112,7 @@ class WorkoutTracker:
             'Weightlifting': [0],
             'Monostructural': [0],
             'Gymnastic': [0],
-            'Pull from ground': [0],
+            'Pull from ground/hinge': [0],
             'Pressing': [0],
             'Below parallel': [0],
             'Upper body pull': [0],
@@ -138,6 +140,7 @@ class WorkoutTracker:
                 'Movement': [self.movement_list],
                 'Type': [self.workout_type],
                 'Rep scheme': [self.rep_scheme],
+                'Total reps': [self.total_reps],
                 'Weight': [self.weight],
                 'True rep scheme': [self.true_rep_scheme],
                 'Workout id': self.workout_id})
@@ -192,7 +195,7 @@ class WorkoutTracker:
             columns=existing_movements)
 
         for i in range(len(self.movement_list)):
-            if movement not in existing_movements:
+            if self.movement_list[i] not in existing_movements:
                 new_entry[self.movement_list[i]] = 0
             new_entry[self.movement_list[i]] += 1
         
