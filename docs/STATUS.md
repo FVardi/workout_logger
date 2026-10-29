@@ -9,7 +9,7 @@ parameter-review items: `docs/AUDIT.md`.
 
 Following GUIDE.md's build order, all four steps have a first draft:
 
-1. **Exercise dictionary** — `src/training/exercises.json`, version 10, 30
+1. **Exercise dictionary** — `src/training/exercises.json`, version 10, 32
    entries (31 movements plus `rest`) with authored `E` weights,
    admissible styles, laterality, implement. Seven patterns —
    `squat`/`hinge`/`push`/`pull`/`flexion`/`brace`/`engine`. Pruned from
@@ -271,7 +271,7 @@ squat cell without any real squat stimulus. Same reasoning that put
 
 **Verified 2026-10-29.** This pass was first written without a working
 sandbox; the full suite (196 tests) has since been run and passes,
-including the 30-entry count in
+including the 30-entry count (32 since the light-pull pass) in
 `test_dictionary_v10_is_the_pruned_minimal_set`, the ladder
 `rounds` + `interval_seconds` tests, and the three-column Today page
 tests. `tracker.bat` also ran on Windows the same day: starts the
@@ -306,10 +306,14 @@ that field.
 
 ## Tests
 
-22 tests in `tests/test_advisor.py`, all offline (in-memory
-SQLite, no real log needed). Two were updated for the review pass above
-rather than the EWMA reversal: the dictionary-shape test now expects 19
-exercises, not 16; the pattern-weight-scaling test no longer asserts
+204 tests across six files, all offline (in-memory SQLite, no real log
+needed): `test_advisor.py` (29), `test_math_worked_example.py` (7),
+`test_db.py` (16), `test_session_templates.py` (47),
+`test_user_config.py` (5) and `test_webapp.py` (100).
+
+In `test_advisor.py`, two were updated for the review pass above rather
+than the EWMA reversal: the dictionary-shape test (now expecting 32
+entries, 31 movements plus `rest`); the pattern-weight-scaling test no longer asserts
 against `brace`'s literal (now-retired) `0.25` and instead monkeypatches a
 synthetic weight, so it pins the *mechanism* (`τ` scales inversely with
 `PATTERN_WEIGHT`) rather than a specific value. Otherwise still cover, from
@@ -342,7 +346,8 @@ scores instead of deficits. Run `python -m training.simulate`.
 Current report, regenerated after the light-pull pass (31 exercises, 16
 cells): **all 31 exercises used**, and every cell's final score sits
 within roughly −0.76 to −0.04 of on-target, entirely on the "ahead" side.
-Demand is 11.0/week against ~12 supply. (The post-review-pass run, at 19
+Demand is 11.0/week against the design notes' ~12 supply (a figure with
+no derivation — see "Known open items"). (The post-review-pass run, at 19
 exercises and 10.0/week, read −0.86 to −0.14; the pre-review-pass run read
 −0.6 to +0.02, with some cells already behind.) The report's period is
 the 60 days before the run date, so regenerating it moves the dates.
@@ -350,8 +355,7 @@ the 60 days before the run date, so regenerating it moves the dates.
 **"Longest gaps at end of simulation"**: days since each admissible cell
 was literally last trained, sorted worst first — the direct check for
 whether the missing overdue clock lets anything visibly languish. Current
-run: worst gap is `hinge/heavy` and `push/hhr`, both at 12 days; nothing
-else exceeds a week. A real improvement over the pre-review-pass run
+run: worst gap is `brace/heavy` at 9 days; nothing else exceeds a week. A real improvement over the pre-review-pass run
 (worst gap `brace/heavy` at 26 days) — mostly the six removed admissible
 cells taking pressure off the ones that remain, not a change to the
 no-clock mechanism itself. Re-check this table every time the simulation
@@ -566,9 +570,10 @@ style sharing a structure label.
 reduce it.** All three only ever *pre-select* — the model scores whatever
 is submitted, and the control stays editable.
 
-1. **Options are restricted to what the exercise admits.** Eight of the
-   nineteen exercises allow only `light`, so there's no question to ask;
-   ten allow `heavy` or `hhr`, so it's one binary pick. (This was computed
+1. **Options are restricted to what the exercise admits.** Of the 31
+   movements, 12 allow only `light` and one (`man_maker`) only `hhr`, so
+   there's no question to ask; the other 18 offer exactly two styles
+   (16 `heavy`/`hhr`, two `light`/`hhr`), so it's one binary pick. (This was computed
    but not wired into the form until now — an earlier version of this
    section claimed it worked when it didn't.)
 2. **The default is the style that exercise was last logged at** — learned
@@ -607,8 +612,9 @@ columns need this). Double-unders and burpees stay rep-counted despite
 being engine-pattern, so they live under the rep-based templates.
 
 **Tested** across `tests/test_webapp.py`,
-`test_session_templates.py` and `test_db.py` — 149 in the training suite,
-with the webapp ones skipped unless the `webapp` extra is installed: auth
+`test_session_templates.py` and `test_db.py` — 163 across those three
+files, with the webapp ones skipped only if `httpx` (a `dev` dependency)
+is missing: auth
 and access control, every template's expansion and what it writes to
 `blocks`/`sets`, all three row units landing in the right column, rows
 past the initially-rendered three being read, that many sets of one
@@ -712,7 +718,10 @@ transient (every EWMA starts at zero, so scores read behind for about `τ`
 days: two weeks for light, eight for hhr); the undocumented "~12" supply
 figure (15 pieces a week by direct count, and heavy demand of 3.75 a week
 is met only with help from the hhr credit); and the `recommend()`
-thresholds being free choices.
+thresholds being free choices. Two of these are deliberately deferred
+(user's call, 2026-10-29): no exercises are added for the single-movement
+cells, to keep the dictionary simple for now, and the start-up transient
+is left as is until there's some real logging to judge it by.
 
 **The rest of the kipping family is still absent.** `kipping_pull_up` is
 back as a light-only exercise (see "Light-pull pass");
@@ -758,7 +767,7 @@ extended:
 Start logging real sessions — now actually possible via the webapp above,
 not just a script. Nothing downstream (whether the missing overdue clock
 is ever actually missed, `k`'s value, whether the new rates feel right,
-whether 19 exercises feels thin day to day, whether the volume/
+whether 31 movements feel thin day to day, whether the volume/
 conditioning-focus knobs behave the way they read) can be decided
 credibly before there's real data. The webapp's own gaps (CSRF, rate
 limiting, email verification — see "Webapp" above) are the next thing to
