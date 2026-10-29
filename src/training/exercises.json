@@ -1,0 +1,406 @@
+{
+  "version": 10,
+  "patterns": [
+    "hinge",
+    "push",
+    "squat",
+    "pull",
+    "flexion",
+    "brace",
+    "engine"
+  ],
+  "styles": [
+    "light",
+    "heavy",
+    "hhr"
+  ],
+  "exercises": [
+    {
+      "id": "back_squat",
+      "name": "Back squat",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "squat": 1.0
+      }
+    },
+    {
+      "id": "deadlift",
+      "name": "Deadlift",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "hinge": 1.0
+      }
+    },
+    {
+      "id": "strict_press",
+      "name": "Strict press",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "push": 1.0
+      }
+    },
+    {
+      "id": "thruster",
+      "name": "Thruster",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "squat": 0.5,
+        "push": 0.5
+      }
+    },
+    {
+      "id": "strict_pull_up",
+      "name": "Strict pull-up",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "pull": 1.0
+      }
+    },
+    {
+      "id": "push_up",
+      "name": "Push-up",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "push": 1.0
+      }
+    },
+    {
+      "id": "air_squat",
+      "name": "Air squat",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "squat": 1.0
+      }
+    },
+    {
+      "id": "toes_to_bar",
+      "name": "Toes-to-bar",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "flexion": 1.0
+      }
+    },
+    {
+      "id": "db_lunge",
+      "name": "Dumbbell lunge",
+      "implement": "dumbbell",
+      "laterality": "unilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "squat": 1.0
+      }
+    },
+    {
+      "id": "kb_swing",
+      "name": "Kettlebell swing",
+      "implement": "kettlebell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light",
+        "hhr"
+      ],
+      "E": {
+        "hinge": 1.0
+      }
+    },
+    {
+      "id": "farmers_carry",
+      "name": "Farmer's carry",
+      "implement": "dumbbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "brace": 1.0
+      }
+    },
+    {
+      "id": "bent_over_row",
+      "name": "Bent-over row",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "pull": 1.0
+      }
+    },
+    {
+      "id": "running",
+      "name": "Running",
+      "implement": "none",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "rowing_erg",
+      "name": "Rowing (erg)",
+      "implement": "rower",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "burpee",
+      "name": "Burpee",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "bench_press",
+      "name": "Bench press",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "push": 1.0
+      }
+    },
+    {
+      "id": "front_squat",
+      "name": "Front squat",
+      "implement": "barbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "squat": 1.0
+      }
+    },
+    {
+      "id": "double_unders",
+      "name": "Double-unders",
+      "implement": "jump_rope",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "biking",
+      "name": "Biking",
+      "implement": "bike",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "db_snatch",
+      "name": "Dumbbell snatch",
+      "implement": "dumbbell",
+      "laterality": "unilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "hinge": 0.7,
+        "push": 0.3
+      }
+    },
+    {
+      "id": "kb_snatch",
+      "name": "Kettlebell snatch",
+      "implement": "kettlebell",
+      "laterality": "unilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "hinge": 0.7,
+        "push": 0.3
+      }
+    },
+    {
+      "id": "db_thruster",
+      "name": "Dumbbell thruster",
+      "implement": "dumbbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "squat": 0.5,
+        "push": 0.5
+      }
+    },
+    {
+      "id": "db_box_step_over",
+      "name": "Dumbbell box step-over",
+      "implement": "dumbbell",
+      "laterality": "unilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "squat": 0.8,
+        "brace": 0.2
+      }
+    },
+    {
+      "id": "devils_press",
+      "name": "Devil's press",
+      "implement": "dumbbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light",
+        "hhr"
+      ],
+      "E": {
+        "hinge": 0.5,
+        "push": 0.5
+      }
+    },
+    {
+      "id": "man_maker",
+      "name": "Man maker",
+      "implement": "dumbbell",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "hhr"
+      ],
+      "E": {
+        "push": 0.35,
+        "pull": 0.3,
+        "squat": 0.25,
+        "brace": 0.1
+      }
+    },
+    {
+      "id": "hspu",
+      "name": "Handstand push-up",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "push": 1.0
+      }
+    },
+    {
+      "id": "suitcase_carry",
+      "name": "Suitcase carry",
+      "implement": "dumbbell",
+      "laterality": "unilateral",
+      "admissible_styles": [
+        "heavy",
+        "hhr"
+      ],
+      "E": {
+        "brace": 1.0
+      }
+    },
+    {
+      "id": "burpee_box_jump_over",
+      "name": "Burpee box jump-over",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "box_jump_over",
+      "name": "Box jump-over",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "engine": 1.0
+      }
+    },
+    {
+      "id": "rest",
+      "name": "Rest",
+      "implement": "none",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light",
+        "heavy",
+        "hhr"
+      ],
+      "E": {}
+    }
+  ]
+}

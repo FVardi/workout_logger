@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+<p class="muted">These change what the model asks of you, not what you're
+  allowed to log.</p>
+
+<form method="post" action="/settings" style="max-width: 34rem;">
+
+  <div class="mb-4">
+    <label class="form-label" for="volume">Overall volume</label>
+    <input class="form-control" type="number" step="0.1" min="0.1" id="volume"
+           name="volume_multiplier" value="{{ settings.volume_multiplier }}">
+    <div class="form-text">
+      1.0 is the default. Lower asks for everything less often; higher, more
+      often.
+    </div>
+  </div>
+
+  <div class="mb-4">
+    <label class="form-label" for="conditioning">Conditioning focus</label>
+    <input class="form-control" type="number" step="0.1" min="0" id="conditioning"
+           name="conditioning_focus" value="{{ settings.conditioning_focus }}">
+    <div class="form-text">
+      Scales how often running, rowing, biking and the like come up, relative
+      to everything else. 1.0 is the default.
+    </div>
+  </div>
+
+  <fieldset class="mb-4">
+    <legend class="form-label">Switch a style off</legend>
+    <div class="form-text mb-2">
+      A style you never want suggested &mdash; tick <code>heavy</code> for
+      &ldquo;no heavy days&rdquo;. Its cells disappear from Today and
+      Coverage entirely.
+    </div>
+    {% for s in styles %}
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" id="style-{{ s }}"
+             name="disabled_styles" value="{{ s }}"
+             {% if s in settings.disabled_styles %}checked{% endif %}>
+      <label class="form-check-label" for="style-{{ s }}">{{ s }}</label>
+    </div>
+    {% endfor %}
+  </fieldset>
+
+  <button class="btn btn-primary" type="submit">Save</button>
+</form>
+
+{% endblock %}

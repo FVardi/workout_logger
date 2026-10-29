@@ -1,0 +1,947 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{framed}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\definecolor{auditbg}{gray}{0.93}
+\definecolor{auditbar}{gray}{0.4}
+\definecolor{fixedbg}{RGB}{230,240,255}
+\definecolor{fixedbar}{RGB}{80,110,180}
+
+\newenvironment{auditbox}{%
+  \def\FrameCommand{\fboxsep=8pt\fboxrule=0pt\colorbox{auditbg}{\vrule width 3pt\relax\color{auditbar}\vrule width 0pt}\colorbox{auditbg}}%
+  \MakeFramed{\advance\hsize-2\width \FrameRestore}\noindent
+  \textbf{Needs audit.}\ %
+}{%
+  \endMakeFramed\medskip
+}
+
+\newenvironment{fixedbox}{%
+  \def\FrameCommand{\fboxsep=8pt\fboxrule=0pt\colorbox{fixedbg}{\vrule width 3pt\relax\color{fixedbar}\vrule width 0pt}\colorbox{fixedbg}}%
+  \MakeFramed{\advance\hsize-2\width \FrameRestore}\noindent
+  \textbf{Found and fixed.}\ %
+}{%
+  \endMakeFramed\medskip
+}
+
+\title{The training advisor: a specification of \texttt{advisor.py}}
+\author{}
+\date{Describes \texttt{src/training/advisor.py} against exercise dictionary version 9.\\
+Spec: \texttt{docs/GUIDE.md} Part B. Parameter review: \texttt{docs/AUDIT.md}.}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\begin{auditbox}
+\textbf{This entire document describes a retired scoring model.} Before
+any real training log existed, \texttt{advisor.py} was rebuilt around a
+single continuous-decay EWMA per cell (\texttt{score = -log(ewma/k)}) and
+one hard overdue clock, replacing the raw-deficit/window/staleness/
+normalization/$\gamma$/resource-interference machinery this document
+formalizes throughout. The resource-cost matrix $R$ and its interference
+scoring are gone from the model entirely, not merely re-derived. See
+\texttt{docs/GUIDE.md}'s Scoring and Overdue sections for the
+live model, and \texttt{docs/STATUS.md} for why the reversal
+happened before this document was updated to match. Every section below
+this point --- the deficit derivation, the overdue-clock table, the
+interference formula, the worked example --- describes dictionary version
+7--9 and is kept only as a correct record of what that model did, not as
+current documentation. A full rewrite against the live model is tracked
+but not yet done.
+\end{auditbox}
+
+\section{What this is}
+
+The advisor is a ranking function, not a program generator: it answers
+``what is most needed today,'' and a human decides how many pieces to do
+and designs the actual session. Nothing here is a claim about training
+science beyond what \texttt{docs/GUIDE.md} states explicitly ---
+this document only formalizes what the code computes.
+
+Grey boxes throughout mark a value the code needs to run but that
+\texttt{GUIDE.md} either left as a free choice or never specified at all
+--- these are exactly the items in \texttt{docs/AUDIT.md}, placed
+here at the point in the math where each one enters. Blue boxes mark a
+bug that was found (via a two-month closed-loop simulation) and already
+fixed; they document a correctness constraint the implementation must
+satisfy, not an open question.
+
+\section{Axes}
+
+Two small finite sets index everything below.
+
+\begin{align*}
+\mathcal{P} &= \{\mathrm{hinge}, \mathrm{push}, \mathrm{squat}, \mathrm{pull}, \mathrm{flexion}, \mathrm{brace}, \mathrm{engine}\} & \text{(patterns, 7)}\\
+\mathcal{S} &= \{\mathrm{light}, \mathrm{heavy}, \mathrm{hhr}\} & \text{(styles, 3)}
+\end{align*}
+
+\texttt{squat}, \texttt{hinge}, \texttt{push}, and \texttt{pull} name
+themselves; \texttt{flexion} is loaded trunk/hip flexion through range
+(archetype: toes-to-bar, V-up) and \texttt{brace} is resisting movement
+under load (planks, loaded carries, the Turkish get-up). The last two
+were a single \texttt{midline} pattern until dictionary version 8 ---
+see \S\ref{sec:patternweight}. \texttt{engine} is restored in version 9 in
+a deliberately narrow form: it contains \emph{only} exercises whose $E$
+row would otherwise be empty (running, biking, rowing, double-unders,
+burpees). That restriction is what makes it compatible with $E$'s
+row-stochasticity --- since no member carries any other pattern weight,
+crediting engine never forces a split that would dilute an existing
+pattern. A general engine pattern would: giving a thruster engine credit
+means subtracting it from $\mathrm{squat}$ and $\mathrm{push}$, because
+rows sum to at most $1$ and weights split volume rather than duplicating
+it. The first four are Pat Sherwood's CrossFit Linchpin gross movement
+patterns (originally coded \texttt{BP}/\texttt{PFG}/\texttt{PR}/\texttt{UBP}/\texttt{ML})
+renamed to match the ``squat/hinge/push/pull'' framing common in general
+S\&C (Dan John and others). Sherwood's ``engine'' was originally dropped,
+on the grounds that it classifies energy system rather than movement and
+duplicated the modality axis --- the latter being the styles axis together
+with the block's logged time-domain fields. Both objections stand against
+a \emph{general} engine pattern, and neither survives the narrow one
+above, which is why running and biking no longer sit in the residual.
+\texttt{hhr} (``heavy
+at high heart rate'') is a stimulus, not a session type: load carried
+while breathing hard, roughly 60--70\% of 1RM for reps inside a workout.
+
+\section{The exercise dictionary}
+
+Let $\mathcal{E}$ be the set of exercises (63 entries in dictionary
+version 9). Each exercise $e \in \mathcal{E}$ carries:
+
+\begin{itemize}[nosep]
+  \item $E_{e} : \mathcal{P} \to [0,1]$, the \textbf{pattern-weight row},
+    with $\sum_{p \in \mathcal{P}} E_{e,p} \le 1$. The unallocated mass
+    $1 - \sum_p E_{e,p}$ is residual --- volume the model doesn't
+    attribute to any pattern. A squat clean is $0.5\,\mathrm{hinge} +
+    0.5\,\mathrm{squat}$; a thruster is $0.5\,\mathrm{squat} + 0.5\,\mathrm{push}$;
+    a clean \& jerk is $0.5\,\mathrm{hinge} + 0.3\,\mathrm{push} +
+    0.2\,\mathrm{squat}$. These three are the only rows \texttt{GUIDE.md}
+    gives explicitly; every other row is this project's draft, reviewed
+    separately from the constants in this document (see
+    \texttt{docs/AUDIT.md}'s closing note).
+  \item $R_e : \mathcal{R} \to \mathbb{R}_{\ge 0}$, the \textbf{resource-cost
+    row}, over
+    $\mathcal{R} = \{\mathrm{knee}, \mathrm{post}, \mathrm{grip},
+    \mathrm{shldr}, \mathrm{lats}, \mathrm{trunk},
+    \mathrm{hang}\}$ (7 resources --- \texttt{cns} and \texttt{aero} both
+    dropped, \texttt{hang} added; see Section~\ref{sec:score}'s reversal
+    note). \texttt{aero} went in version 9: it had been authored for
+    exactly four exercises, all monostructural with an empty $E$ row, so
+    it was collinear with ``is a monostructural exercise'' --- a family
+    label rather than a cost. Its removal left running and double-unders
+    with empty $R$ rows, which the $\|R_e\| = 0$ guard in interference
+    silently turns into zero similarity with everything, so real tissue
+    costs were authored in its place. \texttt{hang} is capsule/tendon
+    fatigue from hanging and swinging from a bar or rings (kipping
+    pull-ups, toes-to-bar, muscle-ups, rope climbs), kept separate from
+    \texttt{shldr} (pressing tension) and \texttt{grip} (crushing/holding
+    load) since the injury mechanism differs from either. $R_e$ itself is
+    \emph{not} normalized --- it is spend,
+    not membership, so a heavier session costs more in absolute terms;
+    only its use inside interference (below) is normalized.
+  \item $A_e \subseteq \mathcal{S}$, the \textbf{admissible styles} --- which
+    of light/heavy/hhr the exercise can be used for. This is what generates
+    the cell mask below: a cell nothing can fill never accrues deficit.
+  \item a \textbf{laterality} in $\{\mathrm{bilateral}, \mathrm{unilateral}\}$
+    and an \textbf{implement} (barbell, dumbbell, kettlebell, bodyweight,
+    \ldots), used for candidate selection and logging, not for scoring
+    directly.
+\end{itemize}
+
+Neither $E$ nor $R$ is ever fit from data --- they are authored judgment,
+versioned, held fixed. A stable-but-wrong map preserves relative trends;
+a map that drifts does not.
+
+\section{The log and exposures}
+
+Every logged set carries a date, a style, an exercise id, and (for
+unilateral exercises) a side. An \textbf{exposure event} is a distinct
+$(\text{date}, s, e) \in \text{Date} \times \mathcal{S} \times \mathcal{E}$
+triple --- multiple sets of the same exercise on the same day (a $5\times5$)
+collapse to one event, and a unilateral exercise logged on both sides on
+the same day also collapses to one event, not two.
+
+\begin{fixedbox}
+The implementation originally summed $E_{e,p}$ once per logged \emph{set
+row} rather than once per exposure event, so a $5\times5$ counted as five
+exposures instead of one, and a unilateral exercise logged L+R counted
+double. Fixed by collapsing to the event definition above before applying
+pattern weights. Two regression tests guard this
+(\texttt{test\_multiple\_sets\_same\_day\_count\_as\_one\_exposure},
+\texttt{test\_unilateral\_sides\_same\_day\_count\_as\_one\_exposure}).
+\end{fixedbox}
+
+Fix a trailing window of $W$ days ending on the query day $t$:
+\[
+X_{p,s}(t) \;=\! \sum_{\substack{(\text{date}, s', e)\ \text{exposure event} \\ s' = s,\ \text{date} \in (t-W,\, t]}} \!\! E_{e,p}
+\]
+the pattern-weighted count of exposures to pattern $p$ at style $s$ within
+the window.
+
+\begin{auditbox}
+\texttt{WINDOW\_DAYS} $= 42$. \texttt{GUIDE.md} calls this ``the most
+consequential single number'' in the whole model, but doesn't
+second-guess the value itself. Every deficit and staleness figure below
+is relative to this window, so it is worth confirming it still matches
+your actual training rhythm before trusting anything downstream.
+\end{auditbox}
+
+\section{Deficits}
+
+Each style has a weekly \textbf{target rate} $\tau_s$ (exposures per week
+per pattern), each pattern a dimensionless \textbf{pattern weight}
+$\omega_p$, and the target for cell $(p,s)$ over the window is
+$\tau_s\, \omega_p\, w$ where $w = W/7$ is the window length in weeks.
+
+\begin{center}
+\begin{tabular}{lccl}
+\toprule
+$s$ & $\tau_s$ (per week per pattern) & source & note\\
+\midrule
+light & $1.35$ & \texttt{GUIDE.md}, trust & residual style, targeted highest\\
+heavy & $0.50$ & \texttt{GUIDE.md}, trust & goal: heavy once per fortnight\\
+hhr & $0.15$--$0.25$ & \texttt{GUIDE.md}, free choice & this code uses $0.20$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Pattern weights}
+\label{sec:patternweight}
+
+\[
+\omega_p = \begin{cases}
+0.25 & p = \mathrm{brace}\\
+1 & \text{otherwise.}
+\end{cases}
+\]
+
+Until dictionary version 8 targets were keyed by style alone and applied
+uniformly across patterns, i.e.\ $\omega_p \equiv 1$. That was harmless
+while $|\mathcal{P}|$ was fixed, and became load-bearing the moment it
+wasn't: splitting \texttt{midline} into \texttt{flexion} and
+\texttt{brace} under $\omega_p \equiv 1$ would have taken total weekly
+demand from
+\[
+|\mathcal{P}| \sum_s \tau_s = 5 \times 2.05 = 10.25
+\quad\text{to}\quad
+6 \times 2.05 = 12.3
+\]
+against a supply of roughly $12$ pattern-bearing pieces per week --- the
+entire capacity slack, spent silently by a taxonomy change that looks
+purely descriptive. With $\omega_{\mathrm{brace}} = 0.25$, demand is
+\[
+\sum_{p}\omega_p \sum_s \tau_s = (5 + 0.25) \times 2.05 = 10.76,
+\]
+and the slack survives --- though only until version 9 added
+$\mathrm{engine}$, which has no heavy cell but does have light and hhr
+ones, taking demand to $12.31$ against the same $\approx 12$. The slack is
+now slightly negative; see the audit box below.
+
+\begin{auditbox}
+$\omega_{\mathrm{engine}} = 1$ leaves total demand at $12.31$ per week
+against a supply of roughly $12$ pattern-bearing pieces --- i.e.\ the
+model is now \textbf{over-subscribed}, and the closed-loop simulation
+shows it: \texttt{push/light} and \texttt{squat/light} finish the run
+\emph{behind} target, the first positive end-state deficits any
+simulation has produced. Lower $\omega_{\mathrm{engine}}$, raise the
+supply estimate on the argument that a run does not compete for a lifting
+slot, or accept over-subscription deliberately.
+\end{auditbox}
+
+\begin{auditbox}
+$\omega_{\mathrm{brace}} = 0.25$ is a \textbf{free choice with nothing
+behind it but the arithmetic above} --- it was chosen to fit the capacity
+budget, not derived from a stated goal about how much carrying and
+bracing is wanted. It is also, as of this writing, \emph{not what the
+model actually delivers}: the 7-day any-exposure clock imposes a floor of
+roughly one exposure per week on every pattern, which outvotes
+$\omega_{\mathrm{brace}}$ entirely. See the audit box in
+Section~\ref{sec:overdue}.
+\end{auditbox}
+
+\begin{auditbox}
+\texttt{TARGET\_RATE["hhr"]} $= 0.20$. \texttt{GUIDE.md} gives a range
+($0.15$--$0.25$, ``free choice; $0.25 \approx 2{:}1$ heavy:hhr'') and
+leaves the exact value to you. This is the midpoint, not a derived
+number --- pick your own ratio.
+\end{auditbox}
+
+A cell $(p,s)$ is \textbf{masked} (excluded from everything below) unless
+some exercise can fill it:
+\[
+\text{admissible}(p,s) \iff \exists\, e \in \mathcal{E} : E_{e,p} > 0 \text{ and } s \in A_e.
+\]
+
+For admissible cells, the deficit is
+\[
+D_{p,s}(t) = \tau_s\, \omega_p\, w \;-\; \widetilde X_{p,s}(t), \qquad
+\widetilde X_{p,s}(t) = \begin{cases}
+X_{p,\mathrm{heavy}}(t) + \eta \cdot X_{p,\mathrm{hhr}}(t) & s = \mathrm{heavy}\\
+X_{p,s}(t) & \text{otherwise,}
+\end{cases}
+\]
+where $\eta$ is the \textbf{hhr credit}: hhr work partially, but never
+fully, substitutes for fresh heavy work toward the heavy cell's own
+deficit --- hhr's own cell is unaffected by $\eta$ and is scored against
+its own target independently.
+
+\begin{auditbox}
+$\eta = \texttt{HHR\_CREDIT} = 0.5$. \texttt{GUIDE.md} gives both the
+value and the physiological reasoning explicitly (loaded conditioning at
+$60$--$70\%$ under fatigue trains work capacity and strength-endurance
+but contributes little to maximal strength, which needs proximity to max
+plus a rested nervous system), so this is probably right as specified.
+Flagged anyway because \texttt{GUIDE.md} itself says ``if the priority
+ever shifts toward maximal strength, lower this credit'' --- that call
+belongs to you, not the code.
+\end{auditbox}
+
+Targets \emph{rank}; they are not reachable goals to report distance
+from. With demand near capacity some cells always show shortfall by
+design, and that is fine --- only the ordering needs to be right.
+
+\section{Overdue overrides: the guarantee layer}
+\label{sec:overdue}
+
+Deficits rank; they do not enforce a hard floor on their own. A separate
+guarantee layer gives a cell past a frequency clock a bonus large enough
+to outrank everything else in the score:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+clock & threshold & satisfied by & applies to cell $(p,s)$ when\\
+\midrule
+any exposure & 7 days & any style & always\\
+loaded & 14 days & heavy or hhr & $s \in \{\mathrm{heavy}, \mathrm{hhr}\}$, $p \notin \mathcal{X}$\\
+classic heavy & 24 days & heavy only & $s = \mathrm{heavy}$, $p \notin \mathcal{X}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Formally, with $\mathrm{last}(p, \mathcal{S}') $ the most recent exposure
+date to pattern $p$ at any style in $\mathcal{S}' \subseteq \mathcal{S}$
+(or $-\infty$ if never):
+\[
+\mathrm{overdue}(p,s,t) = \begin{cases}
+B & t - \mathrm{last}(p,\mathcal{S}) > 7\\
+B & p \notin \mathcal{X},\ s \in \{\mathrm{heavy},\mathrm{hhr}\},\ t - \mathrm{last}(p,\{\mathrm{heavy},\mathrm{hhr}\}) > 14\\
+B & p \notin \mathcal{X},\ s = \mathrm{heavy},\ t - \mathrm{last}(p,\{\mathrm{heavy}\}) > 24\\
+0 & \text{otherwise,}
+\end{cases}
+\]
+checked in that order (the first satisfied condition wins), where
+$\mathcal{X} = \{\mathrm{flexion}, \mathrm{brace}, \mathrm{engine}\}$ is
+the set of \textbf{clock-exempt} patterns. Both are exempt from the 14- and 24-day
+clocks --- every other pattern loads the trunk incidentally, so a
+dedicated heavy-trunk target would overstate the need, and \texttt{brace}
+additionally consists of movements that are loaded by nature and would
+otherwise trip the classic-heavy clock unprompted --- but \emph{not} from
+the 7-day any-exposure clock.
+
+\begin{auditbox}
+That last exemption boundary is currently doing something unintended.
+The 7-day clock implies a floor of roughly one exposure per week, while
+$\omega_{\mathrm{brace}} = 0.25$ asks for about half that. The clock
+always wins, so \texttt{brace}'s effective rate is about twice its stated
+target. Either $\mathcal{X}$'s members need a longer any-exposure
+threshold, or $\omega_{\mathrm{brace}}$ should rise to match a weekly
+floor. See \texttt{docs/AUDIT.md}.
+\end{auditbox}
+The loaded and classic-heavy clocks only bonus the styles that can
+actually resolve them: a light pick can't clear a ``loaded'' debt, so
+$\mathrm{overdue}(p, \mathrm{light}, t)$ never receives the 14- or 24-day
+bonus, only the 7-day one.
+
+\begin{auditbox}
+$B = \texttt{OVERDUE\_BONUS} = 1000.0$. \texttt{GUIDE.md} specifies only
+that the bonus must be ``large enough to outrank everything''; this is a
+sentinel constant, not a bound derived from the other terms' ranges. Safe
+as long as no plausible combination of the terms in Section~\ref{sec:score}
+can approach it, but worth re-checking if the $\lambda$'s or staleness
+caps below are ever changed by a large factor.
+\end{auditbox}
+
+\section{Candidate selection}
+\label{sec:selection}
+
+For an admissible cell $(p,s)$, the eligible exercises are
+$\{e \in \mathcal{E} : E_{e,p} > 0,\ s \in A_e\}$. The candidate offered
+for that cell is the \textbf{stalest eligible variant}:
+\[
+\hat e(p,s,t) = \operatorname*{arg\,max}_{e \text{ eligible}} \Big(t - \mathrm{lastlogged}(e),\ E_{e,p},\ e\Big)
+\]
+lexicographically --- staleness first (never-logged treated as
+$+\infty$), pattern weight as tie-break, exercise id as final tie-break
+for determinism. Because each cell contributes only its stalest variant,
+the second-best option for that cell is never shown --- a known,
+documented limitation, not a bug.
+
+\section{Scoring}
+\label{sec:score}
+
+For each admissible cell, with $\hat e = \hat e(p,s,t)$ as the candidate
+and $C$ the set of exercises already chosen this session:
+\begin{align}
+\mathrm{score}(p,s) \;=\;\; & \widehat D_{p,s}(t) \notag\\
++\;\; & \gamma_p \cdot M_p(t) \notag\\
++\;\; & \lambda_{\mathrm{cell}} \cdot \frac{\min\!\big(t - \mathrm{last}(p,\{s\}),\ 21\big)}{21} \notag\\
++\;\; & \lambda_{\mathrm{uni}} \cdot \frac{\min\!\big(\max(u_p, 0),\ 3.0\big)}{3.0} \notag\\
++\;\; & \mathrm{overdue}(p,s,t) \notag\\
+-\;\; & 0.25 \sum_{c \in C} \widehat R_{\hat e} \, W \, \widehat R_c^{\!\top} \notag\\
+-\;\; & 1.1 \sum_{c \in C} \mathbb{1}\!\left[\exists\, p' : E_{\hat e,p'} > 0 \wedge E_{c,p'} > 0\right] \notag
+\end{align}
+where $\widehat R_e = R_e / \|R_e\|_2$ is $e$'s resource-cost row unit-normalized.
+with the following pieces.
+
+\paragraph{Reversal: normalized deficit and staleness, $\lambda_{\mathrm{move}}$ removed.}
+$\widehat D_{p,s}(t) = D_{p,s}(t) / (\tau_s \omega_p w)$ --- the deficit
+expressed as a fraction of that \emph{cell's} own target. Since exposure
+is never negative, $D_{p,s} \le \tau_s \omega_p w$ always, so $\widehat D$
+is bounded above by $1$ with no new machinery. Dividing by the
+pattern-scaled target (rather than $\tau_s w$) extends the same guarantee
+across patterns now that $\omega_p \not\equiv 1$: a fully-neglected
+\texttt{brace} cell saturates at $1$ exactly like a fully-neglected
+\texttt{squat} cell, despite an absolute target a quarter the size.
+Without it \texttt{brace} could never outrank \texttt{squat} no matter how
+long it went untouched --- the identical failure this normalization was
+introduced to fix across styles. This matters because targets vary a lot in
+absolute size (hhr's is $1.2$ over the window, light's is $8.1$):
+comparing raw deficits structurally favours whichever style has the
+biggest target, exactly the problem \texttt{recommend()} (Section~\ref{sec:recommend})
+already had to correct for one level up. Normalizing fixes it here too: a
+fully-neglected hhr cell and a fully-neglected light cell both saturate
+at $\widehat D = 1$, on equal footing. Cell staleness and the unilateral
+shortfall are divided by their own caps ($21$ days, $3.0$) the same way,
+so every additive term above lives on a comparable $[0,1]$-ish scale, and
+the $\lambda$'s are weights on that scale rather than magnitude-matched
+placeholders guessed against a moving target.
+
+$\lambda_{\mathrm{move}}$ (movement-level staleness) has been removed
+entirely. It never affected \emph{which} exercise got offered for a cell
+--- that was always $\hat e(p,s,t)$ from Section~\ref{sec:selection},
+independent of scoring. Its only job was a secondary nudge to a cell's
+ranking when its offered candidate happened to be stale even though the
+cell overall wasn't; GUIDE.md records that an ablation on the discarded
+prototype had already found it moved outcomes by $\sim 0.05$ on one seed
+--- removing it is a real simplification, not a loss of a load-bearing
+mechanism.
+
+\emph{Deliberately not done:} no unbounded/accumulating staleness term
+was added to compensate. An accumulating deficit (never capped, only
+reset by servicing, à la Deficit Round Robin scheduling) would give the
+same eventual-guarantee property the overdue clocks below provide, but
+this model does greedy top-1 selection rather than round-robin service,
+so an unbounded backlog could monopolize the schedule for an extended
+stretch once large enough. The clocks stay a separate, bounded, fixed-
+magnitude override rather than a growing one.
+
+\begin{auditbox}
+\textbf{Correction from an earlier version of this document:}
+$\gamma_{\mathrm{behind}}=0.35$/$\gamma_{\mathrm{over}}=0.10$ and the
+resource-overlap coefficient $0.25$ below were previously described as
+trusted GUIDE.md values, reasoning that GUIDE.md states their numbers
+directly. That conflated ``has a specific number attached'' with
+``derived from stated goals.'' GUIDE.md's own parameter classification
+places \emph{both} in the tuned-against-synthetic-history, near-noise
+class --- same as the $\lambda$'s. The asymmetry in $\gamma$ (behind
+pulls harder than over-covered pushes back) is the load-bearing idea;
+the specific magnitudes came from the same ablation process as everything
+else in this box, not from GUIDE.md's stated requirements.
+
+$\lambda_{\mathrm{cell}} = 0.25$ (was $0.10$), $\lambda_{\mathrm{uni}} =
+0.10$ (was $0.30$) --- rescaled for the normalization above, by
+preserving each term's old ratio to deficit's old maximum: $\lambda_{\mathrm{cell}}$
+contributed up to $0.10 \times 21 = 2.1$ against a max deficit of $8.1$,
+a ratio of $\approx 0.26$; $\lambda_{\mathrm{uni}}$ contributed up to
+$0.30 \times 3.0 = 0.9$ against the same $8.1$, a ratio of $\approx
+0.11$. Rounded to clean numbers rather than false precision. Still a
+guess, just a rescaled one --- GUIDE.md's own posture here is ``leave
+conservative until real logs exist.''
+
+\textbf{Newly discovered, not yet resolved:} the resource-overlap
+coefficient ($0.25$, below) and the same-pattern-repeat coefficient
+($1.1$) were left at their original values, since neither was part of
+what this normalization pass touched. But both multiply a \emph{raw},
+unnormalized magnitude ($R\,W\,R^\top$, and a $0/1$ indicator), the same
+kind of quantity $\lambda_{\mathrm{cell}}$ used to be calibrated against
+before it was rescaled. With deficit now capped at $1$ instead of running
+up to $8$, these two penalty terms are relatively far more powerful than
+before, and can now push a candidate's score negative on their own (the
+worked example in Section~\ref{sec:example} hits exactly this). Whether
+that's a problem or a reasonable consequence of "resource conflicts
+should genuinely veto a pick" is an open question, not yet decided.
+\end{auditbox}
+
+\paragraph{Coupling across styles.} $M_p(t)$ is now the \emph{mean} of
+$\widehat D_{p,s'}(t)$ over $p$'s admissible styles $s'$ (not the sum, as
+it was before normalization) --- keeping it on the same $[-\infty,1]$-ish
+scale as $\widehat D$ itself:
+\[
+M_p(t) = \frac{1}{|\{s' : \text{admissible}(p,s')\}|} \sum_{s' \in \mathcal{S}} \widehat D_{p,s'}(t),
+\qquad
+\gamma_p = \begin{cases} 0.35 & M_p(t) > 0\\ 0.10 & \text{otherwise.}\end{cases}
+\]
+The asymmetry matters: without it, over-coverage in one style starved
+patterns that had few admissible cells in another.
+
+\paragraph{Unilateral shortfall.} $u_p = \texttt{UNILATERAL\_TARGET}
+\cdot w - U_p(t)$, where $\texttt{UNILATERAL\_TARGET} = 0.30$ per week per
+pattern (\texttt{GUIDE.md}, trust) and $U_p(t)$ is the windowed,
+pattern-weighted count of exposure events from unilateral exercises,
+clamped to $[0, 3.0]$ before normalizing --- uncapped, every pattern went
+maximally behind at once the first time this was implemented, and the
+whole candidate list went unilateral.
+
+\paragraph{Reversal: resource interference is now cosine similarity.}
+$W \in \mathbb{R}^{8\times8}$ is the resource-interaction matrix, so
+$\widehat R_{\hat e}\,W\,\widehat R_c^{\top}$ --- with $W = I$, this
+reduces to the ordinary cosine similarity between $\hat e$ and $c$'s
+resource-cost profiles, bounded to $[0,1]$ since no resource cost is
+negative. This is what lets the model know a bike ride blocks a heavy
+squat despite sharing no movement pattern.
+
+Two changes from an earlier version of this document, made together.
+First, \texttt{cns} was dropped from $\mathcal{R}$ entirely: it was
+present in every one of the 64 exercises, making
+it the single most universally-shared resource and the dominant driver of
+interference between almost any two picks, regardless of whether they
+actually competed for the same tissue --- also the least concretely
+groundable of the eight numbers being authored per exercise to begin
+with. Second, interference used to be the \emph{raw} dot product
+$R_{\hat e}\,W\,R_c^\top$, unbounded and scaling with both vectors'
+absolute magnitude; once deficit was normalized to $[0,1]$, this became
+disproportionately powerful, as Section~\ref{sec:example} showed directly
+(a candidate's score flipped negative purely from resource overlap).
+Unit-normalizing $R$ before the dot product --- i.e. cosine similarity
+--- fixes that by construction, and also changes what the term
+\emph{means}: from ``how much absolute stress do these share'' to ``how
+similar are their stress profiles,'' which is arguably the more correct
+notion of interference independent of the rescaling motivation.
+
+\begin{auditbox}
+\texttt{GUIDE.md} defines interference as $R\,W\,R^{\top}$ but never gives
+$W$'s values. It currently defaults to the $8\times 8$ identity matrix ---
+no assumed cross-resource coupling; \texttt{grip} fatigue doesn't spill
+into \texttt{shldr} fatigue, \texttt{hang} doesn't spill into either, and
+so on. That is the most conservative possible choice, not a reasoned one.
+\texttt{hang} is the resource most likely to actually deserve coupling to
+\texttt{shldr}/\texttt{grip} (a kipping shoulder is a real overuse
+pattern, not an independent one) --- worth a look once real logs exist.
+If some resources should interact,
+edit the matrix directly in \texttt{exercises.json}. Separately,
+\texttt{RESOURCE\_OVERLAP\_COEF} $= 0.25$ is unchanged in value but not in
+meaning: it now weights a bounded $[0,1]$ quantity, so it reads as ``a
+fully-overlapping resource profile costs as much as maximal cell
+staleness'' ($=\lambda_{\mathrm{cell}}$) rather than a fraction of an
+unbounded raw magnitude. Still a guess pending real logs.
+\end{auditbox}
+
+\paragraph{Same-pattern repeat.} The indicator sum counts how many already-chosen
+exercises this session share at least one pattern with the candidate.
+This is a soft penalty, not a mask --- back squat then front squat stays
+reachable if below-parallel is genuinely starved --- with coefficient
+$1.1$, of unclear provenance: GUIDE.md's near-noise list doesn't name it
+explicitly, but it isn't in the trust-these requirements table either.
+
+\section{Hard and soft session rules}
+
+One rule is a hard mask rather than a scoring penalty: a pattern loaded
+today (by any already-chosen exercise, at any style) cannot reappear at
+\texttt{hhr} in the same session --- no heavy squat followed by squatting
+at high heart rate. Formally, when generating candidates for
+$s = \mathrm{hhr}$, the cell $(p, \mathrm{hhr})$ is dropped entirely
+(not merely penalized) whenever $p \in \bigcup_{c \in C}\{p' : E_{c,p'}>0\}$.
+
+Every other interaction between already-chosen exercises and a new
+candidate --- same pattern at heavy, shared resource cost --- is a soft
+penalty already folded into the score in Section~\ref{sec:score}, not a
+second masking layer.
+
+\section{Rep scheme and rep count}
+
+Rep schemes apply to \texttt{heavy} only (an \texttt{hhr} piece gets a rep
+target, not a scheme). For a pattern $p$ due for heavy work, the
+suggested scheme is whichever entry in a fixed menu was least recently
+used for that pattern at \texttt{heavy} --- ranked per pattern, not
+globally, so heavy cleans avoid schemes recently used by heavy deadlifts.
+
+\begin{auditbox}
+The scheme menu (\texttt{REP\_SCHEMES}: \texttt{5x5}, \texttt{3x3x3x3x3},
+\texttt{5-3-1}, \texttt{8x3}, \texttt{3RM build}, \texttt{10x2},
+\texttt{4x6}) doesn't come from \texttt{GUIDE.md} --- it describes
+schemes being ranked per pattern by staleness but never names an actual
+menu. This list is a generic placeholder; swap in whatever you actually
+program.
+\end{auditbox}
+
+Rep counts are not prescribed at all: \texttt{suggest\_rep\_count} returns
+the rolling median of reps logged for a given (exercise, style) pair, or
+\texttt{None} if there is no history yet. Rep counts are learned from the
+log, never authored, because rep counts are skewed and a median is the
+right summary; schemes are categorical and cannot be averaged the same
+way, which is why they are ranked instead.
+
+\section{The \texttt{recommend()} verdict}
+\label{sec:recommend}
+
+\texttt{recommend()} answers which \emph{mode} (not cell) is most needed,
+comparing styles \textbf{relative to each style's own target} --- light is
+targeted at nearly three times heavy's rate, so comparing raw deficits
+would always favor light regardless of actual need. For each style with
+at least one admissible cell:
+\[
+\rho_s(t) = 100 \cdot \frac{\sum_{p} D_{p,s}(t)}{\sum_{p : \text{admissible}(p,s)} \tau_s\, \omega_p\, w}
+\]
+the aggregate deficit as a percentage of that style's own aggregate
+target. Let $s^\star = \operatorname{arg\,max}_s \rho_s(t)$.
+
+\begin{fixedbox}
+Ranking $s^\star$ purely by $\rho_{s^\star}(t) = \max_s \rho_s(t)$ without
+checking its sign let the verdict declare a style ``needed'' when
+\emph{every} style was already over its target. A two-month closed-loop
+simulation showed exactly this: once every $\rho_s(t)$ went negative
+(all styles over-covered — an artifact of the simulation forcing a fixed
+number of pieces per session with no stopping rule), light kept "winning"
+the comparison every week, with the reported margin \emph{growing},
+purely because heavy and hhr were becoming more over-covered
+\emph{faster} --- not because light was falling behind. Fixed: if
+$\rho_{s^\star}(t) \le 0$, the verdict is unconditionally
+\texttt{no strong signal} with no style named, regardless of the margin
+to the runner-up. Guarded by
+\texttt{test\_recommend\_does\_not\_favour\_the\_least\_overshot\_style}.
+\end{fixedbox}
+
+When $\rho_{s^\star}(t) > 0$, let $\rho_{(2)}(t)$ be the second-highest
+value and $\mu(t) = \rho_{s^\star}(t) - \rho_{(2)}(t)$ the margin. The
+verdict bands are
+\[
+\mathrm{band}(t) = \begin{cases}
+\texttt{clear} & \mu(t) > 25\\
+\texttt{leaning} & \mu(t) > 10\\
+\texttt{no strong signal} & \text{otherwise,}
+\end{cases}
+\]
+with the style named only in the first two bands --- \texttt{GUIDE.md} is
+explicit that most days genuinely have no right answer, and the output
+should say so rather than force a pick. All three band thresholds
+($25$, $10$) are given directly by \texttt{GUIDE.md}, not tuned here.
+
+\section{A worked example}
+\label{sec:example}
+
+Everything above is abstract; this section runs the actual pipeline on a
+small, hand-picked slice of the dictionary and a short synthetic log, so
+every number below can be checked by hand. This is illustrative only ---
+a reduced 5-exercise dictionary, not the full dictionary itself, chosen
+to touch every mechanism in the model with round numbers.
+
+\begin{auditbox}
+\textbf{This section is still on the pre-version-8 five-pattern set and
+has not been reworked.} Everything above it reflects dictionary version 8
+(six patterns, $\omega_p$, $\mathcal{X}$); the arithmetic below was
+hand-checked against version 7 and is left intact rather than
+half-migrated, because the two are not reconcilable by renaming: the
+example's fifth exercise is a kettlebell swing carrying
+$\mathrm{midline} = 0.2$, and version 8 removed exactly that credit on the
+grounds that a swing's reactive bracing is a resource cost, not
+adaptation-specific transfer. Reworking it means choosing a new fifth
+exercise and recomputing the deficit table, the normalized deficits and
+both scored cells --- worth doing deliberately, not as a search-replace.
+Read this section as a correct illustration of the \emph{mechanisms},
+with stale pattern names.
+\end{auditbox}
+
+\subsection{A reduced dictionary}
+
+Five exercises, one per pattern (kettlebell swing also touches midline as
+a secondary pattern, showing what a nonzero residual looks like):
+
+\begin{center}
+\begin{tabular}{lccccccl}
+\toprule
+exercise & hinge & push & squat & pull & midline & residual & admissible styles\\
+\midrule
+back squat & -- & -- & 1.0 & -- & -- & 0.0 & heavy, hhr\\
+kettlebell swing & 0.4 & -- & -- & -- & 0.2 & 0.4 & light, hhr\\
+strict pull-up & -- & -- & -- & 1.0 & -- & 0.0 & light, heavy, hhr\\
+strict press & -- & 1.0 & -- & -- & -- & 0.0 & heavy, hhr\\
+deadlift & 1.0 & -- & -- & -- & -- & 0.0 & light, heavy, hhr\\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{center}\small this is the matrix $E$ --- rows are exercises, columns are patterns, ``--'' is 0\end{center}
+
+\begin{center}
+\begin{tabular}{lccccccc}
+\toprule
+exercise & knee & post & grip & shldr & lats & trunk & hang\\
+\midrule
+back squat & 3 & 1 & -- & -- & -- & 2 & --\\
+kettlebell swing & -- & 1 & 1 & -- & -- & 1 & --\\
+strict pull-up & -- & -- & 1 & -- & 2 & -- & 1\\
+strict press & -- & -- & -- & 3 & -- & 1 & --\\
+deadlift & -- & 3 & 2 & -- & -- & 2 & --\\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{center}\small this is the matrix $R$ (\texttt{aero} omitted --- none of these five touch it; \texttt{cns} is gone from the model entirely, see Section~\ref{sec:score}. Strict pull-up's \texttt{hang}$=1$ doesn't feed into any calculation shown below --- none of the interference examples involve it.)\end{center}
+
+All five are bilateral, so the unilateral-shortfall term below comes out
+identical across patterns in this example --- dictionary version 7 has
+unilateral variants for all of these; none are included here to keep the
+arithmetic small. $W$, the resource-interaction matrix, is the
+$8\times8$ identity throughout (Section~\ref{sec:score}'s audit box) ---
+with $W=I$, $\widehat R_a\,W\,\widehat R_b^\top$ reduces to ordinary
+cosine similarity, so it is not worth drawing out as a $64$-entry table
+of mostly zeros.
+
+From this dictionary alone, three cells are masked before any log exists
+at all: \textbf{(squat, light)} --- no light-admissible squat exercise
+here --- and likewise \textbf{(push, light)} and \textbf{(midline, heavy)}.
+(Dictionary version 7 does have light-squat and heavy-midline options; the
+mask here is an artifact of using only 5 exercises, not a property of the
+real dictionary.) 12 cells remain admissible.
+
+\subsection{A five-event log and the resulting deficits}
+
+Take the query day $t$ as ``today,'' with the usual $42$-day window
+($w=6$ weeks). The log:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+days before $t$ & exercise & style & contributes\\
+\midrule
+3 & back squat & heavy & $\mathrm{squat} \mathrel{+}= 1.0$\\
+5 & kettlebell swing & hhr & $\mathrm{hinge} \mathrel{+}= 0.4,\ \mathrm{midline} \mathrel{+}= 0.2$\\
+15 & strict pull-up & heavy & $\mathrm{pull} \mathrel{+}= 1.0$\\
+20 & deadlift & light & $\mathrm{hinge} \mathrel{+}= 1.0$\\
+25 & strict press & heavy & $\mathrm{push} \mathrel{+}= 1.0$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All five fall inside the window (the oldest, at day 25, is well clear of
+the day-42 edge, picked deliberately so none of the near-the-boundary
+cliff behaviour discussed earlier shows up here and complicates the
+arithmetic). Windowed exposures $X_{p,s}$, everywhere else $0$:
+\begin{align*}
+X_{\mathrm{squat,heavy}} &= 1.0, & X_{\mathrm{hinge,hhr}} &= 0.4, & X_{\mathrm{midline,hhr}} &= 0.2,\\
+X_{\mathrm{pull,heavy}} &= 1.0, & X_{\mathrm{hinge,light}} &= 1.0, & X_{\mathrm{push,heavy}} &= 1.0.
+\end{align*}
+
+Targets: $\tau_{\mathrm{light}}\,w = 1.35 \times 6 = 8.1$,
+$\tau_{\mathrm{heavy}}\,w = 0.50 \times 6 = 3.0$,
+$\tau_{\mathrm{hhr}}\,w = 0.20 \times 6 = 1.2$. Only hinge's heavy cell picks
+up the $\eta=0.5$ hhr credit, from the kettlebell-swing exposure:
+$\widetilde X_{\mathrm{hinge,heavy}} = 0 + 0.5 \times 0.4 = 0.2$; every other
+heavy cell here has zero hhr exposure to credit, so $\widetilde X = X$
+for them.
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+pattern & light & heavy & hhr\\
+\midrule
+hinge & $8.1 - 1.0 = 7.1$ & $3.0 - 0.2 = 2.8$ & $1.2 - 0.4 = 0.8$\\
+push & \textit{masked} & $3.0 - 1.0 = 2.0$ & $1.2 - 0 = 1.2$\\
+squat & \textit{masked} & $3.0 - 1.0 = 2.0$ & $1.2 - 0 = 1.2$\\
+pull & $8.1 - 0 = 8.1$ & $3.0 - 1.0 = 2.0$ & $1.2 - 0 = 1.2$\\
+midline & $8.1 - 0 = 8.1$ & \textit{masked} & $1.2 - 0.2 = 1.0$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{center}\small $D_{p,s}(t)$, the full deficit table for this state\end{center}
+
+\subsection{Normalized deficits and the coupling term}
+
+Dividing the table above by each column's own target ($8.1$/$3.0$/$1.2$)
+gives $\widehat D_{p,s}(t)$, and averaging each pattern's admissible
+entries gives $M_p(t)$ (Section~\ref{sec:score}):
+
+\begin{center}
+\begin{tabular}{lrrr r}
+\toprule
+pattern & light & heavy & hhr & $M_p(t)$\\
+\midrule
+hinge & $0.877$ & $0.933$ & $0.667$ & $0.826$\\
+push & \textit{masked} & $0.667$ & $1.000$ & $0.833$\\
+squat & \textit{masked} & $0.667$ & $1.000$ & $0.833$\\
+pull & $1.000$ & $0.667$ & $1.000$ & $0.889$\\
+midline & $1.000$ & \textit{masked} & $0.833$ & $0.917$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every $M_p(t) > 0$ here, so $\gamma_p = 0.35$ throughout this example.
+
+\subsection{Scoring two cells: overdue versus not}
+
+\textbf{Cell (push, heavy).} The only pattern-push exercise here, strict
+press, is also the only eligible candidate, so $\hat e = \text{strict
+press}$ regardless of staleness. Pattern push was last touched (any style)
+25 days ago, so $t - \mathrm{last}(\mathrm{push},\mathcal{S}) = 25 > 7$: the
+7-day clock alone is already tripped, so $\mathrm{overdue} = 1000$ before
+the 14- and 24-day clocks are even consulted. With nothing chosen yet
+this session ($C = \emptyset$, so the overlap and repeat terms are both
+$0$):
+\begin{align*}
+\mathrm{score}(\mathrm{push},\mathrm{heavy})
+&= \underbrace{0.667}_{\widehat D} + \underbrace{0.35 \times 0.833}_{\gamma M = 0.292}
+ + \underbrace{0.25 \times \tfrac{\min(25,21)}{21}}_{\lambda_{\mathrm{cell}} = 0.250}\\
+&\quad + \underbrace{0.10 \times \tfrac{1.8}{3.0}}_{\lambda_{\mathrm{uni}} = 0.060}
+ + \underbrace{1000}_{\mathrm{overdue}}\\
+&= 1001.27.
+\end{align*}
+(The unilateral term is $0.10 \times \min(\max(0.30\times 6 - 0, 0),
+3.0)/3.0 = 0.10 \times 0.6 = 0.060$ for every pattern here, since none of
+the five exercises are unilateral.)
+
+\textbf{Cell (hinge, light).} Two exercises are eligible --- deadlift and
+kettlebell swing both allow light and both carry hinge weight. Deadlift was
+last logged 20 days ago; kettlebell swing 5 days ago, \emph{as hhr} ---
+which no longer matters for scoring since $\lambda_{\mathrm{move}}$ is
+gone, but it still decides which exercise selection offers, and deadlift
+is stalest. Pattern hinge was touched 5 days ago (that same
+kettlebell-swing set), so $t - \mathrm{last}(\mathrm{hinge},\mathcal{S}) = 5
+\le 7$: not overdue --- and since this cell's style is \texttt{light},
+the 14- and 24-day clocks never apply to it regardless of staleness
+(Section~\ref{sec:overdue}):
+\begin{align*}
+\mathrm{score}(\mathrm{hinge},\mathrm{light})
+&= \underbrace{0.877}_{\widehat D} + \underbrace{0.35 \times 0.826}_{0.289}
+ + \underbrace{0.25 \times \tfrac{\min(20,21)}{21}}_{0.238}\\
+&\quad + \underbrace{0.10 \times \tfrac{1.8}{3.0}}_{0.060}
+ + \underbrace{0}_{\mathrm{overdue}}\\
+&= 1.46.
+\end{align*}
+
+Even though (hinge, light) has the second-largest raw deficit in the whole
+table, (push, heavy) outranks it by roughly $685\times$ --- \emph{more}
+lopsided than before normalization (it was $\sim70\times$), because
+normalizing shrank the non-overdue scores without touching the overdue
+bonus at all. Exactly what ``a bonus large enough to outrank everything''
+is supposed to do, and a reminder that $B=1000$ has even more headroom
+now (see Section~\ref{sec:overdue}'s audit box). (Not shown in detail:
+(hinge, heavy) is \emph{also} overdue in this state, but only via the
+24-day classic-heavy clock --- hinge has never actually been trained at
+true heavy style in this log, so
+$t - \mathrm{last}(\mathrm{hinge},\{\mathrm{heavy}\}) = \infty$, even
+though the recent hhr exposure keeps both the 7- and 14-day clocks
+satisfied. This is the reason the model needs three separate clocks
+rather than one: hhr work can keep a pattern ``warm'' without ever
+satisfying the specific requirement for fresh heavy work.)
+
+\subsection{A second pick: resource overlap, now properly scaled}
+
+Suppose (push, heavy) is chosen first, so $C = \{\text{strict press}\}$.
+Now score (squat, hhr) --- candidate: back squat, the only squat exercise
+admissible at hhr. With $\mathrm{cns}$ gone, the two resource-cost rows
+are $R_{\text{back squat}} = (\mathrm{knee}{:}3, \mathrm{post}{:}1,
+\mathrm{trunk}{:}2)$ and $R_{\text{strict press}} = (\mathrm{shldr}{:}3,
+\mathrm{trunk}{:}1)$, sharing only $\mathrm{trunk}$:
+\[
+\widehat R_{\text{back squat}} \cdot W \cdot \widehat R_{\text{strict press}}^\top
+= \frac{2 \times 1}{\|(3,1,2)\|\;\|(3,1)\|}
+= \frac{2}{3.742 \times 3.162} = 0.169.
+\]
+Back squat and strict press share no pattern ($\mathrm{squat} \ne
+\mathrm{push}$), so the same-pattern-repeat term is $0$. Pattern squat was
+touched 3 days ago by that same back-squat set, which also satisfies
+squat's own loaded clock, so (squat, hhr) is not overdue. $\widehat
+D_{\mathrm{squat,hhr}} = 1.2/1.2 = 1.0$ (squat has never had an hhr exposure,
+so this cell is fully unmet):
+\begin{align*}
+\mathrm{score}(\mathrm{squat},\mathrm{hhr})
+&= \underbrace{1.0}_{\widehat D} + \underbrace{0.35 \times 0.833}_{0.292}
+ + \underbrace{0.25 \times \tfrac{21}{21}}_{0.250} + \underbrace{0.10 \times \tfrac{1.8}{3.0}}_{0.060}\\
+&\quad + 0
+ - \underbrace{0.25 \times 0.169}_{0.042}
+ - 0\\
+&= 1.559.
+\end{align*}
+Comfortably positive, and this is the direct payoff of the two changes in
+Section~\ref{sec:score}'s reversal: under the raw, pre-\texttt{cns}-removal
+formula this same candidate scored $-0.398$ --- a $2$-point overlap
+penalty (driven mostly by $\mathrm{cns}{:}3\times2=6$ of the raw dot
+product's $8$) exceeded every positive term combined. With \texttt{cns}
+gone and the remaining overlap unit-normalized, the penalty drops to
+$0.042$: back squat and strict press turn out to share very little
+resource cost once the artificially-universal \texttt{cns} entry is
+removed, and the residual overlap costs a proportionate amount rather
+than dominating the score.
+
+This is also where the hard rule bites: (push, hhr), with a normalized
+deficit of $0.8/1.2 = 0.667$, would ordinarily be a live candidate in the
+workout pool --- but because push was already loaded today (by strict
+press, at heavy), that cell is \emph{dropped from the candidate list
+entirely}, not merely penalized. It cannot appear no matter how far
+behind it is, for the rest of this session.
+
+\subsection{The \texttt{recommend()} verdict on this state}
+
+Using the same deficit table, at the original state (before either pick
+above):
+\begin{align*}
+\rho_{\mathrm{light}} &= 100 \cdot \frac{7.1 + 8.1 + 8.1}{8.1 \times 3} = 95.9\%,\\
+\rho_{\mathrm{heavy}} &= 100 \cdot \frac{2.8+2.0+2.0+2.0}{3.0 \times 4} = 73.3\%,\\
+\rho_{\mathrm{hhr}} &= 100 \cdot \frac{0.8+1.2+1.2+1.2+1.0}{1.2 \times 5} = 90.0\%.
+\end{align*}
+All three are positive (nothing is over-covered), so the sign guard from
+Section~\ref{sec:recommend} does not apply. Light ranks first, hhr
+second, margin $95.9 - 90.0 = 5.9$ --- under the leaning threshold of
+$10$, so the verdict is \texttt{no strong signal} with no style named,
+even though light's raw deficit sum ($23.3$) is nearly double heavy's
+($8.8$). That gap is exactly why the comparison is relative to each
+style's own target rather than on raw deficits: light's target is also
+nearly triple heavy's, and once that is accounted for, the three styles
+are much closer to equally served than the raw sums suggest.
+
+\section*{Summary: every item flagged above}
+
+\begin{center}
+\small
+\begin{tabular}{p{3.8cm} p{2.2cm} p{8.5cm}}
+\toprule
+constant & value used & status\\
+\midrule
+\texttt{WINDOW\_DAYS} & 42 & GUIDE.md value, not second-guessed\\
+\texttt{TARGET\_RATE["hhr"]} & 0.20 & midpoint of GUIDE.md's 0.15--0.25 range\\
+\texttt{HHR\_CREDIT} & 0.5 & GUIDE.md value; ``lower if priority shifts'' is your call\\
+\texttt{OVERDUE\_DAYS} & 7 / 14 / 24 & GUIDE.md values, stated as goals-as-constraints\\
+\texttt{GAMMA\_BEHIND / GAMMA\_OVER} & 0.35 / 0.10 & tuned/near-noise per GUIDE.md's own classification (corrected --- previously mislabeled ``trust''); asymmetry is the point, magnitudes aren't\\
+\texttt{LAMBDA\_CELL} & 0.25 (was 0.10) & rescaled for normalized [0,1] deficit; still a placeholder\\
+\texttt{LAMBDA\_MOVE} & \emph{removed} & simplification; selection is unaffected, ablation found it near-noise\\
+\texttt{LAMBDA\_UNI} & 0.10 (was 0.30) & rescaled for normalized [0,1] deficit; still a placeholder\\
+\texttt{UNILATERAL\_\allowbreak SHORTFALL\_CAP} & 3.0 & unspecified in GUIDE.md; placeholder (defines what gets normalized, unchanged)\\
+resource matrix $W$ & identity ($8\times8$) & unspecified in GUIDE.md; conservative default; \texttt{cns} row/col removed, \texttt{hang} row/col added\\
+\texttt{RESOURCE\_OVERLAP\_COEF} & 0.25 & tuned/near-noise per GUIDE.md; same value, new meaning --- weights bounded cosine similarity (Section~\ref{sec:score}'s reversal), not raw magnitude\\
+\texttt{SAME\_PATTERN\_\allowbreak REPEAT\_COEF} & 1.1 & provenance unclear --- not in GUIDE.md's near-noise list nor its trust-these table; still a raw count, not normalized by session size\\
+\texttt{OVERDUE\_BONUS} & 1000.0 & sentinel, not derived from other terms; even more headroom now that other terms are normalized\\
+\texttt{REP\_SCHEMES} & generic list & not specified in GUIDE.md; placeholder menu\\
+band thresholds & 25 / 10 & GUIDE.md values\\
+$E$/$R$ dictionary rows & \multicolumn{2}{p{10.5cm}}{authored draft beyond the 3 GUIDE.md examples --- separate review}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{sloppypar}
+None of the placeholder rows above have been exercised against real
+training data. Per \texttt{docs/\allowbreak GUIDE.md}'s own build
+order, that is the next step, not more constant-tweaking in the abstract.
+The resource-overlap coefficient's disproportionate power (an earlier
+version of this document showed it flipping a candidate's score negative)
+has since been resolved by dropping \texttt{cns} and normalizing
+interference to cosine similarity, both described in Section~\ref{sec:score}
+and demonstrated in Section~\ref{sec:example}. The same-pattern-repeat
+coefficient's analogous issue --- a raw count rather than a normalized
+fraction --- has not.
+\end{sloppypar}
+
+\end{document}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Coverage{% endblock %}
+{% block content %}
+
+<h1>Coverage</h1>
+<p class="muted">
+  Every pattern and style, worst first. The bar shows how far from target
+  &mdash; <span class="cov-behind-text">behind</span> is the one worth acting on.
+</p>
+
+{% if disabled_styles %}
+<p class="muted"><small>Hidden, switched off in
+  <a href="/settings">settings</a>: {{ disabled_styles|join(', ') }}.</small></p>
+{% endif %}
+
+<table class="table table-sm align-middle">
+  <thead>
+    <tr>
+      <th>Pattern</th>
+      <th>Style</th>
+      <th style="width: 35%">How far off</th>
+      <th class="text-end">Score</th>
+      <th class="text-end">Last done</th>
+      <th class="text-end">Target every</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.pattern }}</td>
+      <td class="muted">{{ r.style }}</td>
+      <td>
+        <span class="cov-bar {% if r.score == inf %}cov-untouched{% elif r.score > 0 %}cov-behind{% else %}cov-ahead{% endif %}">
+          <span style="width: {{ r.bar_pct }}%"></span>
+        </span>
+      </td>
+      <td class="text-end cov-score
+                 {%- if r.score == inf %} cov-untouched-text
+                 {%- elif r.score > 0 %} cov-behind-text{% endif %}">
+        {{ r.score_display }}
+      </td>
+      <td class="text-end muted">
+        {{ (r.days_since ~ "d ago") if r.days_since is not none else "&mdash;"|safe }}
+      </td>
+      <td class="text-end muted">{{ "%.0f"|format(r.target_interval_days) }}d</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No cells &mdash; check your settings.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p class="muted"><small>
+  Score is &minus;log(ewma / k): <strong>0</strong> is on target, positive is
+  behind and grows the longer a cell is left, negative is ahead.
+  &ldquo;Last done&rdquo; counts literal training of that cell only &mdash;
+  high-heart-rate work credits toward the matching heavy cell's score without
+  resetting its clock.
+</small></p>
+
+{% endblock %}

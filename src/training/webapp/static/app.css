@@ -1,0 +1,108 @@
+/* Training tracker — app styling.
+ *
+ * Every theme decision lives in this file. The templates carry structure and
+ * Bootstrap utility classes only, so re-skinning the tracker later (it may
+ * become its own product with its own identity) is an edit here rather than
+ * a pass over every template.
+ *
+ * Currently matched to the blog (the separate math_blog repo): Bootswatch
+ * "cosmo" is loaded in base.html, which is the same Bootstrap 5 theme the
+ * blog's _quarto.yml uses, and the variables below mirror the four overrides
+ * in the blog's styles.scss. Keep those two
+ * files in sync, or deliberately diverge — but do it here, in one place.
+ */
+
+:root {
+  --app-body-color: #1c1c1e;
+  --app-link-color: #1b5e8c;
+  --app-muted: #6c757d;
+  --app-rule: #e5e7eb;
+
+  /* Coverage encoding. Behind target is the thing worth noticing, so it gets
+     the only saturated colour on the page. */
+  --app-behind: #b4471f;
+  --app-ahead: #4b7a5a;
+  --app-untouched: #1b5e8c;
+}
+
+body {
+  font-family: "Source Sans 3", system-ui, sans-serif;
+  color: var(--app-body-color);
+}
+
+a { color: var(--app-link-color); }
+
+h1, h2, h3 { letter-spacing: -0.01em; }
+
+h1 { font-size: 1.75rem; }
+h2 { font-size: 1.25rem; margin-top: 2rem; }
+
+/* Numbers should line up in every table in the app — scores, loads, volumes. */
+table { font-variant-numeric: tabular-nums; }
+
+.navbar-brand { font-weight: 600; letter-spacing: -0.01em; }
+
+/* Page width: wide enough for the log form's rows, narrow enough to read. */
+main { max-width: 60rem; }
+
+.muted { color: var(--app-muted); }
+
+/* --- Coverage ---------------------------------------------------------- */
+
+/* A bar beats a signed number for "what's behind?", which is the only
+   question this table answers. Width is set inline from the score. */
+.cov-bar {
+  display: block;
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--app-rule);
+  overflow: hidden;
+}
+.cov-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 0.25rem;
+}
+.cov-behind > span { background: var(--app-behind); }
+.cov-ahead > span { background: var(--app-ahead); opacity: 0.55; }
+.cov-untouched > span { background: var(--app-untouched); }
+
+.cov-score { font-size: 0.9rem; }
+.cov-behind-text { color: var(--app-behind); font-weight: 600; }
+.cov-untouched-text { color: var(--app-untouched); }
+
+/* --- Log form ----------------------------------------------------------- */
+
+/* Dense inputs: the log form is a grid of small numbers, and Bootstrap's
+   default control height makes six rows of it taller than a screen. */
+.row-table input,
+.row-table select { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+
+.row-table th {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--app-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.row-table td { vertical-align: middle; }
+
+/* Today's pieces read as prose, not as data — a piece is a sentence. */
+.piece-summary { font-weight: 500; }
+
+/* A style field with only one legal value isn't a question; make it look
+   like the statement it is rather than a control awaiting a decision. */
+select.style-fixed {
+  background-color: #f6f7f9;
+  color: var(--app-muted);
+}
+
+/* A style the app guessed from the load. Marked because a wrong guess you
+   don't notice is worse than no guess — this is the only cue that the value
+   wasn't chosen by you. */
+select.style-guessed { border-left: 3px solid var(--app-link-color); }
+
+/* --- Auth pages --------------------------------------------------------- */
+
+.auth-card { max-width: 24rem; margin: 4rem auto; }

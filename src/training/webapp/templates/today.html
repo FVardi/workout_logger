@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Today{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="mb-0">Today</h1>
+  <a class="btn btn-primary" href="/log">Log a piece</a>
+</div>
+
+{% if verdict.style %}
+<div class="alert alert-secondary py-2">
+  Most needed: <strong>{{ verdict.style }}</strong>
+  <span class="muted">&mdash; {{ verdict.band }}, margin {{ "%.2f"|format(verdict.margin) }}</span>
+</div>
+{% else %}
+<p class="muted">No style stands out today &mdash; anything reasonable is fine.</p>
+{% endif %}
+
+{% if logged_today or picked %}
+<div class="mb-3">
+  {% if logged_today %}
+  <div>
+    <span class="muted">Already trained today:</span>
+    {% for p in logged_today %}<span class="badge bg-secondary">{{ p.name }}</span> {% endfor %}
+  </div>
+  {% endif %}
+  {% if picked %}
+  <div class="mt-1">
+    <span class="muted">Planning:</span>
+    {% for p in picked %}<span class="badge bg-primary">{{ p.name }}</span> {% endfor %}
+    <a class="ms-2" href="/">clear</a>
+  </div>
+  {% endif %}
+  <div class="form-text">
+    Those patterns are covered, so they're out of the suggestions below.
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-3">
+  {% for key, label, entries in columns %}
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header py-2">
+        <strong>{{ key }}</strong>
+        <div class="form-text mb-0">{{ label }}</div>
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for entry in entries %}
+        <li class="list-group-item p-0">
+          <a class="d-flex justify-content-between align-items-start text-decoration-none p-2 text-reset"
+             href="{{ entry.pick_url }}"
+             title="Pick this &mdash; the other columns re-score without its pattern">
+            <span>
+              {{ entry.candidate.exercise.name }}
+              <small class="d-block muted">
+                {{ entry.candidate.pattern }}
+                {%- if entry.candidate.reasoning.cell_staleness_days is not none %}
+                  &middot; {{ entry.candidate.reasoning.cell_staleness_days }}d since
+                {%- else %} &middot; never trained{% endif %}
+              </small>
+            </span>
+            <span class="badge bg-light text-dark align-self-center">
+              {{ "new" if entry.candidate.score == inf else "%+.2f"|format(entry.candidate.score) }}
+            </span>
+          </a>
+        </li>
+        {% else %}
+        <li class="list-group-item muted">
+          {% if key in disabled_styles %}
+            Switched off in <a href="/settings">settings</a>.
+          {% else %}
+            Nothing left &mdash; every pattern here is covered.
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<p class="mt-3 mb-0 muted"><small>
+  Higher score = further behind; <code>new</code> means never trained at that
+  style. Click a movement to plan it &mdash; the columns re-score with its
+  pattern taken out, which is how a second choice becomes a first.
+  Picks are a plan only, held in the URL; nothing is logged until you
+  <a href="/log">log it</a>. <a href="/coverage">Coverage</a> shows every
+  cell, not just each one's top pick.
+</small></p>
+
+{% endblock %}

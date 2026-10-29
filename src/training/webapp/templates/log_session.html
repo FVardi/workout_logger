@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% block title %}Log{% endblock %}
+{% block content %}
+
+<h1>Log</h1>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+{% if today_pieces %}
+<table class="table table-sm align-middle mb-2">
+  <thead>
+    <tr>
+      <th>{% if on_date == today %}Today so far{% else %}Logged on {{ on_date }}{% endif %}</th>
+      <th style="width: 5rem">Time</th>
+      <th style="width: 7rem">Style</th><th>Volume</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in today_pieces %}
+    <tr>
+      <td class="piece-summary">{{ p.summary or p.structure or "piece" }}</td>
+      <td>{{ p.result_text }}</td>
+      <td class="muted">{{ p.styles|join(", ") }}</td>
+      <td class="muted">{{ p.volume_text }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="mb-4"><a href="/">See how this changed today's suggestions &rarr;</a></p>
+{% else %}
+<p class="muted mb-4">
+  Nothing logged {% if on_date == today %}yet today{% else %}on {{ on_date }}{% endif %}.
+</p>
+{% endif %}
+
+<div class="card">
+  <div class="card-body">
+
+    <div class="mb-4" style="max-width: 24rem;">
+      <label class="form-label" for="template-picker">Workout type</label>
+      <select class="form-select" id="template-picker">
+        {% for t in templates %}
+        <option value="{{ t }}" {% if t == active %}selected{% endif %}>{{ template_labels[t] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+{#- Reusable bits ------------------------------------------------------- -#}
+
+{#- Every exercise, running and rowing included. They used to be hidden
+    here and confined to a separate "engine" type, which made a workout
+    like "3 rounds: 400 m run, 20 air squats" unloggable - a row carries a
+    unit now, so a run is just a movement measured in metres. -#}
+{% macro exercise_options() %}
+  <option value="">&mdash;</option>
+  {% for ex in exercises %}
+  <option value="{{ ex.id }}">{{ ex.name }}</option>
+  {% endfor %}
+{% endmacro %}
+
+{#- Style select. Rendered with every style, then narrowed by JS to the
+    selected exercise's admissible ones (and hidden entirely when there's
+    only one). Rendering the full list server-side keeps it working without
+    JS - you'd just see options the server would reject, same as before. -#}
+{% macro style_options() %}
+  {% for s in styles %}<option value="{{ s }}">{{ style_labels.get(s, s) }}</option>{% endfor %}
+{% endmacro %}
+
+{#- Each workout type is its own <form>, so the date has to appear in each
+    of them. JS keeps them in sync, so switching type doesn't lose a date
+    you already set; without JS each form still carries its own working
+    field. -#}
+{% macro date_field() %}
+<div class="row g-3 mb-3" style="max-width: 26rem;">
+  <div class="col-7">
+    <label class="form-label">Date</label>
+    <input class="form-control js-log-date" type="date" name="date"
+           value="{{ on_date }}" max="{{ max_date }}">
+  </div>
+  <div class="col-5">
+    <label class="form-label">Time <span class="muted">(optional)</span></label>
+    <input class="form-control" type="text" name="result_time" placeholder="12:30">
+  </div>
+</div>
+{% endmacro %}
+
+{% macro movement_row(i, with_amount=True) %}
+<tr class="row-item">
+  <td><select class="form-select form-select-sm" name="m{{ i }}_exercise_id">{{ exercise_options() }}</select></td>
+  {% if with_amount %}
+  <td><input class="form-control form-control-sm" type="number" step="any" min="0" name="m{{ i }}_amount"></td>
+  <td>
+    <select class="form-select form-select-sm" name="m{{ i }}_unit">
+      {% for value, label in units.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+  </td>
+  {% endif %}
+  <td><input class="form-control form-control-sm" type="number" step="0.5" min="0" name="m{{ i }}_load"></td>
+  <td><select class="form-select form-select-sm" name="m{{ i }}_style">{{ style_options() }}</select></td>
+</tr>
+{% endmacro %}
+
+{% macro movement_table(with_amount=True) %}
+<table class="table table-sm row-table" data-prefix="m">
+  <thead>
+    <tr>
+      <th style="width: 32%">Movement</th>
+      {% if with_amount %}<th style="width: 15%">Amount</th><th style="width: 15%">Unit</th>{% endif %}
+      <th style="width: 15%">Load</th><th style="width: 18%">Style</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for i in movement_rows %}{{ movement_row(i, with_amount) }}{% endfor %}
+  </tbody>
+</table>
+<button type="button" class="btn btn-sm btn-outline-secondary add-row mb-3">+ Add movement</button>
+<p class="form-text">
+  Style is per movement &mdash; a heavy triple inside a metcon is still
+  <code>heavy</code>. Pre-filled from the last time you logged that movement.
+</p>
+{% endmacro %}
+
+{#- Forms, one per workout type ------------------------------------------ -#}
+
+<div class="template-form" data-template="strength" {% if active != "strength" %}hidden{% endif %}>
+<form method="post" action="/log">
+  <input type="hidden" name="template" value="strength">
+  {{ date_field() }}
+  <div class="row g-3 mb-3">
+    <div class="col-md-5">
+      <label class="form-label">Movement</label>
+      <select class="form-select" name="exercise_id">{{ exercise_options() }}</select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Style</label>
+      <select class="form-select" name="style">{{ style_options() }}</select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Scheme <span class="muted">(optional)</span></label>
+      <input class="form-control" type="text" name="scheme" placeholder="5x5">
+    </div>
+  </div>
+
+  <table class="table table-sm row-table" data-prefix="s" style="max-width: 26rem;">
+    <thead><tr><th style="width: 3rem">Set</th><th>Reps</th><th>Load</th></tr></thead>
+    <tbody>
+      {% for i in set_rows %}
+      <tr class="row-item">
+        <td class="muted">{{ loop.index }}</td>
+        <td><input class="form-control form-control-sm" type="number" name="s{{ i }}_reps"></td>
+        <td><input class="form-control form-control-sm" type="number" step="0.5" name="s{{ i }}_load"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="button" class="btn btn-sm btn-outline-secondary add-row mb-3">+ Add set</button>
+  <p class="form-text">
+    One row per set, so a wave up in load (5&#64;80, 4&#64;85, 3&#64;90,
+    2&#64;95, 1&#64;100) is a single piece. Leave unused rows blank.
+  </p>
+  <button class="btn btn-primary" type="submit">Log it</button>
+</form>
+</div>
+
+<div class="template-form" data-template="rounds" {% if active != "rounds" %}hidden{% endif %}>
+<form method="post" action="/log">
+  <input type="hidden" name="template" value="rounds">
+  {{ date_field() }}
+  <div class="row g-3 mb-3" style="max-width: 26rem;">
+    <div class="col-6">
+      <label class="form-label">Rounds</label>
+      <input class="form-control" type="number" name="rounds" value="3" min="1">
+    </div>
+    <div class="col-6">
+      <label class="form-label">Time cap <span class="muted">(min)</span></label>
+      <input class="form-control" type="number" name="time_cap_minutes">
+    </div>
+  </div>
+  {{ movement_table() }}
+  <button class="btn btn-primary" type="submit">Log it</button>
+</form>
+</div>
+
+<div class="template-form" data-template="ladder" {% if active != "ladder" %}hidden{% endif %}>
+<form method="post" action="/log">
+  <input type="hidden" name="template" value="ladder">
+  {{ date_field() }}
+  <div class="row g-3 mb-3" style="max-width: 40rem;">
+    <div class="col-md-4">
+      <label class="form-label">Rep scheme</label>
+      <input class="form-control" type="text" name="rep_scheme" value="21-15-9">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Repeats</label>
+      <input class="form-control" type="number" name="ladder_rounds" value="1" min="1">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Every <span class="muted">(min)</span></label>
+      <input class="form-control" type="number" name="ladder_every_minutes">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Time cap <span class="muted">(min)</span></label>
+      <input class="form-control" type="number" name="time_cap_minutes">
+    </div>
+  </div>
+  {{ movement_table(with_amount=False) }}
+  <p class="form-text">
+    Reps come from the scheme, so the rows only need load.
+    <strong>Repeats</strong> runs the whole ladder more than once &mdash;
+    with <strong>Every</strong>, that's a ladder on a clock
+    (<code>3 x 5-4-3-2-1, every 7 min</code>). Unlike an EMOM, every
+    movement happens in every rung.
+  </p>
+  <button class="btn btn-primary" type="submit">Log it</button>
+</form>
+</div>
+
+<div class="template-form" data-template="emom" {% if active != "emom" %}hidden{% endif %}>
+<form method="post" action="/log">
+  <input type="hidden" name="template" value="emom">
+  {{ date_field() }}
+  <div class="row g-3 mb-3" style="max-width: 26rem;">
+    <div class="col-6">
+      <label class="form-label">For <span class="muted">(min)</span></label>
+      <input class="form-control" type="number" name="total_minutes" value="12" min="1">
+    </div>
+    <div class="col-6">
+      <label class="form-label">Every <span class="muted">(min)</span></label>
+      <input class="form-control" type="number" name="every_minutes" value="1" min="1">
+    </div>
+  </div>
+  {{ movement_table() }}
+  <p class="form-text">
+    <strong>Movements alternate</strong> &mdash; one per interval, taking
+    turns. Twelve minutes of thrusters and burpees is six of each, not
+    twelve of both. For work-and-rest intervals where everything happens
+    every round, use <em>For time (rounds)</em> with a <em>Rest</em> row
+    instead. Rest here is the remainder of each interval and isn't logged.
+  </p>
+  <button class="btn btn-primary" type="submit">Log it</button>
+</form>
+</div>
+
+<div class="template-form" data-template="amrap" {% if active != "amrap" %}hidden{% endif %}>
+<form method="post" action="/log">
+  <input type="hidden" name="template" value="amrap">
+  {{ date_field() }}
+  <div class="row g-3 mb-3" style="max-width: 34rem;">
+    <div class="col-4">
+      <label class="form-label">Time cap <span class="muted">(min)</span></label>
+      <input class="form-control" type="number" name="time_cap_minutes" value="12" min="1">
+    </div>
+    <div class="col-4">
+      <label class="form-label">Rounds done</label>
+      <input class="form-control" type="number" name="rounds_completed" value="0" min="0">
+    </div>
+    <div class="col-4">
+      <label class="form-label">Partial reps</label>
+      <input class="form-control" type="number" name="partial_reps">
+    </div>
+  </div>
+  {{ movement_table() }}
+  <button class="btn btn-primary" type="submit">Log it</button>
+</form>
+</div>
+
+
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var STYLE_INFO = {{ style_info|tojson }};
+  var STYLE_LABELS = {{ style_labels|tojson }};
+  var HEAVY_FRACTION = {{ heavy_load_fraction }};
+
+  // Which style should this movement default to, given the load typed in?
+  //
+  // Three rules, in order: an exercise admitting one style has no choice to
+  // make; a load at or above HEAVY_FRACTION of your own heaviest ever logged
+  // for that lift reads as heavy rather than hhr; otherwise fall back to
+  // whatever you logged it as last time. Only ever *pre-selects* - the
+  // select stays editable and the model scores what's submitted.
+  function styleFor(exerciseId, load) {
+    var info = STYLE_INFO[exerciseId];
+    if (!info) { return null; }
+    var opts = info.admissible;
+    if (opts.length === 1) { return { options: opts, chosen: opts[0], guessed: false }; }
+
+    var canGuess = load > 0 && info.heaviest > 0
+                   && opts.indexOf("heavy") >= 0 && opts.indexOf("hhr") >= 0;
+    if (canGuess) {
+      return {
+        options: opts,
+        chosen: load >= HEAVY_FRACTION * info.heaviest ? "heavy" : "hhr",
+        guessed: true,
+        heaviest: info.heaviest
+      };
+    }
+    return { options: opts, chosen: info.default, guessed: false };
+  }
+
+  function loadValue(scope) {
+    // A movement row carries its own load. The strength form has one
+    // movement across many set rows, so the heaviest set is what decides -
+    // a wave up to a heavy single is a heavy piece, not an hhr one.
+    var loads = Array.prototype.map.call(
+      scope.querySelectorAll('[name$="_load"]'),
+      function (el) { return parseFloat(el.value) || 0; }
+    );
+    return loads.length ? Math.max.apply(null, loads) : 0;
+  }
+
+  function refreshStyle(scope) {
+    var ex = scope.querySelector('[name="exercise_id"], [name$="_exercise_id"]');
+    var st = scope.querySelector('[name="style"], [name$="_style"]');
+    if (!ex || !st) { return; }
+
+    var result = styleFor(ex.value, loadValue(scope));
+    if (!result) { return; }
+
+    // Never clobber a style the person set themselves.
+    var keep = st.dataset.touched === "1" ? st.value : result.chosen;
+
+    st.innerHTML = "";
+    result.options.forEach(function (value) {
+      var option = document.createElement("option");
+      option.value = value;
+      option.textContent = STYLE_LABELS[value] || value;
+      if (value === keep) { option.selected = true; }
+      st.appendChild(option);
+    });
+
+    var onlyOne = result.options.length === 1;
+    st.classList.toggle("style-fixed", onlyOne);
+    st.classList.toggle("style-guessed", result.guessed && st.dataset.touched !== "1");
+    st.title = onlyOne
+      ? "This movement can only be logged one way."
+      : (result.guessed
+          ? "Guessed from the load — your heaviest logged is " + result.heaviest + ". Change it if that's wrong."
+          : "");
+  }
+
+  // A style the person picks themselves stays picked, until they change the
+  // movement (at which point the old choice means nothing).
+  document.addEventListener("change", function (event) {
+    var el = event.target;
+    if (el.matches('[name="style"], [name$="_style"]')) { el.dataset.touched = "1"; }
+    if (el.matches('[name="exercise_id"], [name$="_exercise_id"]')) {
+      var scope = el.closest("tr") || el.closest("form");
+      var st = scope.querySelector('[name="style"], [name$="_style"]');
+      if (st) { st.dataset.touched = ""; }
+      refreshStyle(scope);
+    }
+    if (el.matches('[name$="_load"]')) {
+      refreshStyle(el.closest("tr") || el.closest("form"));
+    }
+  });
+
+  function refreshAll() {
+    document.querySelectorAll(".template-form form").forEach(function (form) {
+      var rows = form.querySelectorAll("tr.row-item [name$='_exercise_id']");
+      if (rows.length) {
+        rows.forEach(function (el) { refreshStyle(el.closest("tr")); });
+      } else {
+        refreshStyle(form);
+      }
+    });
+  }
+  refreshAll();
+
+  // Each type is its own form and so has its own date input. Mirror any
+  // change across all of them, so setting the date and then switching type
+  // doesn't quietly revert to today.
+  var dateFields = document.querySelectorAll(".js-log-date");
+  dateFields.forEach(function (field) {
+    field.addEventListener("change", function () {
+      dateFields.forEach(function (other) { other.value = field.value; });
+    });
+  });
+
+  var picker = document.getElementById("template-picker");
+  var forms = document.querySelectorAll(".template-form");
+
+  // Switch which form is visible. Client-side rather than reloading so
+  // half-filled input isn't lost while browsing the types.
+  picker.addEventListener("change", function () {
+    forms.forEach(function (el) { el.hidden = el.dataset.template !== picker.value; });
+  });
+
+  // "+ Add": clone the last row of the preceding table, renumber its field
+  // names, clear it. One handler for both the set and movement tables - they
+  // differ only in their data-prefix.
+  var MAX_ROWS = {{ max_rows }};
+  document.querySelectorAll(".add-row").forEach(function (button) {
+    // Each button sits directly after the table it extends.
+    var table = button.previousElementSibling;
+    if (!table || !table.classList.contains("row-table")) { return; }
+    var body = table.querySelector("tbody");
+    var prefix = table.dataset.prefix;
+
+    button.addEventListener("click", function () {
+      var rows = body.querySelectorAll(".row-item");
+      if (rows.length >= MAX_ROWS) { button.disabled = true; return; }
+
+      var next = rows[rows.length - 1].cloneNode(true);
+      var index = rows.length;
+      next.querySelectorAll("[name]").forEach(function (field) {
+        field.name = field.name.replace(new RegExp("^" + prefix + "\\d+_"), prefix + index + "_");
+        if (field.tagName === "INPUT") { field.value = ""; } else { field.selectedIndex = 0; }
+      });
+      // Renumber the visible set counter, if this table has one.
+      var counter = next.querySelector("td.muted");
+      if (counter && /^\d+$/.test(counter.textContent.trim())) {
+        counter.textContent = index + 1;
+      }
+      body.appendChild(next);
+      refreshStyle(next);   // a cloned row starts blank, so re-derive its style
+    });
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Training{% endblock %}</title>
+
+  {# Bootswatch "cosmo" — the same Bootstrap 5 theme the blog (math_blog repo) uses via
+     _quarto.yml's `theme: [cosmo, styles.scss]`, so the two match. Swap this
+     one line plus static/app.css to give the tracker its own identity. #}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/cosmo/bootstrap.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<nav class="navbar navbar-expand-md navbar-light bg-light border-bottom mb-4">
+  <div class="container-fluid" style="max-width: 60rem;">
+    <a class="navbar-brand" href="/">Training</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+            data-bs-target="#nav" aria-controls="nav" aria-expanded="false"
+            aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item"><a class="nav-link{% if active_nav == 'today' %} active{% endif %}" href="/">Today</a></li>
+        <li class="nav-item"><a class="nav-link{% if active_nav == 'log' %} active{% endif %}" href="/log">Log</a></li>
+        <li class="nav-item"><a class="nav-link{% if active_nav == 'coverage' %} active{% endif %}" href="/coverage">Coverage</a></li>
+        <li class="nav-item"><a class="nav-link{% if active_nav == 'history' %} active{% endif %}" href="/history">History</a></li>
+        <li class="nav-item"><a class="nav-link{% if active_nav == 'settings' %} active{% endif %}" href="/settings">Settings</a></li>
+      </ul>
+      <form method="post" action="/logout" class="d-flex">
+        <button type="submit" class="btn btn-sm btn-outline-secondary">Log out</button>
+      </form>
+    </div>
+  </div>
+</nav>
+
+<main class="container-fluid pb-5">
+  {% block content %}{% endblock %}
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

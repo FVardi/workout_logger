@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+
+<h1>History</h1>
+<p class="muted">
+  One row per piece, newest first. The individual sets are still stored
+  &mdash; they're just not what you want to read.
+</p>
+
+<table class="table align-middle">
+  <thead>
+    <tr>
+      <th style="width: 7rem">Date</th>
+      <th>Piece</th>
+      <th style="width: 5rem">Time</th>
+      <th style="width: 7rem">Style</th>
+      <th>Volume</th>
+      <th style="width: 8rem"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in pieces %}
+    <tr>
+      <td class="muted">{{ p.date }}</td>
+      <td class="piece-summary">{{ p.summary or p.structure or "piece" }}</td>
+      <td>{{ p.result_text }}</td>
+      <td class="muted">{{ p.styles|join(", ") }}</td>
+      <td class="muted">{{ p.volume_text }}</td>
+      <td class="text-end">
+        <a class="btn btn-sm btn-outline-secondary"
+           href="/history/edit?session_id={{ p.session_id }}&amp;piece_group={{ p.piece_group }}">Edit</a>
+        <form method="post" action="/history/delete" class="d-inline js-confirm-delete"
+              data-summary="{{ p.summary or p.structure or 'this piece' }}">
+          <input type="hidden" name="session_id" value="{{ p.session_id }}">
+          <input type="hidden" name="piece_group" value="{{ p.piece_group }}">
+          <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">Nothing logged yet.
+      <a href="/log">Log your first piece</a>.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Deleting a piece removes its sets outright and there's no undo, so it
+// asks first. Naming the piece in the prompt matters - the buttons are in
+// a dense table and the wrong row is an easy mis-click.
+document.querySelectorAll(".js-confirm-delete").forEach(function (form) {
+  form.addEventListener("submit", function (event) {
+    if (!window.confirm("Delete “" + form.dataset.summary + "”? This can't be undone.")) {
+      event.preventDefault();
+    }
+  });
+});
+</script>
+{% endblock %}

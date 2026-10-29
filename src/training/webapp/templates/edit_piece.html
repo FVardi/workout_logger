@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Edit piece{% endblock %}
+{% block content %}
+
+<h1>Edit piece</h1>
+<p class="muted">
+  {{ piece.summary or piece.structure or "piece" }}
+</p>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+<form method="post" action="/history/edit">
+  <input type="hidden" name="session_id" value="{{ piece.session_id }}">
+  <input type="hidden" name="piece_group" value="{{ piece.piece_group }}">
+
+  <div class="row g-3 mb-3" style="max-width: 40rem;">
+    <div class="col-md-4">
+      <label class="form-label" for="date">Date</label>
+      <input class="form-control" type="date" id="date" name="date" value="{{ piece.date }}">
+    </div>
+    <div class="col-md-5">
+      <label class="form-label" for="structure">Label</label>
+      <input class="form-control" type="text" id="structure" name="structure"
+             value="{{ piece.structure or '' }}" placeholder="3 RFT">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label" for="result_time">Time</label>
+      <input class="form-control" type="text" id="result_time" name="result_time"
+             value="{{ result_text }}" placeholder="12:30">
+    </div>
+  </div>
+
+  <table class="table table-sm row-table" data-prefix="m">
+    <thead>
+      <tr>
+        <th style="width: 28%">Movement</th>
+        <th style="width: 20%">Amounts</th>
+        <th style="width: 13%">Unit</th>
+        <th style="width: 13%">Load</th>
+        <th style="width: 20%">Style</th>
+        <th style="width: 6%"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="row-item">
+        <td>
+          <select class="form-select form-select-sm" name="m{{ loop.index0 }}_exercise_id">
+            <option value="">&mdash;</option>
+            {% for ex in exercises %}
+            <option value="{{ ex.id }}" {% if ex.id == r.exercise_id %}selected{% endif %}>{{ ex.name }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <input class="form-control form-control-sm" type="text"
+                 name="m{{ loop.index0 }}_amounts" value="{{ r.amounts_text }}"
+                 placeholder="21-15-9">
+        </td>
+        <td>
+          <select class="form-select form-select-sm" name="m{{ loop.index0 }}_unit">
+            {% for value, label in units.items() %}
+            <option value="{{ value }}" {% if value == r.unit %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <input class="form-control form-control-sm" type="number" step="0.5" min="0"
+                 name="m{{ loop.index0 }}_load" value="{{ r.load_text }}">
+        </td>
+        <td>
+          <select class="form-select form-select-sm" name="m{{ loop.index0 }}_style">
+            {% for s in styles %}
+            <option value="{{ s }}" {% if s == r.style %}selected{% endif %}>{{ style_labels.get(s, s) }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td class="text-end">
+          <button type="button" class="btn btn-sm btn-outline-secondary remove-row"
+                  title="Remove this movement">&times;</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="button" class="btn btn-sm btn-outline-secondary add-row mb-3">+ Add movement</button>
+
+  <div>
+    <button class="btn btn-primary" type="submit">Save</button>
+    <a class="btn btn-link" href="/history">Cancel</a>
+  </div>
+
+  <p class="form-text mt-3">
+    One row per movement. <strong>Amounts</strong> is the whole sequence:
+    <code>21-15-9</code> is three rounds, <code>20-20-20</code> is three
+    equal ones. Add or remove a number to change the round count.
+  </p>
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // Removing a row leaves a gap in the m0_, m1_, ... numbering, and the
+  // server skips blank rows anyway - but renumbering keeps the submitted
+  // form tidy and within the scan limit.
+  function renumber(body) {
+    body.querySelectorAll(".row-item").forEach(function (row, index) {
+      row.querySelectorAll("[name]").forEach(function (field) {
+        field.name = field.name.replace(/^m\d+_/, "m" + index + "_");
+      });
+    });
+  }
+
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest(".remove-row");
+    if (button) {
+      var row = button.closest(".row-item");
+      var body = row.parentNode;
+      if (body.querySelectorAll(".row-item").length <= 1) {
+        // The last row can't be removed - an empty piece is a delete, and
+        // that's a different button with a confirmation on it.
+        return;
+      }
+      row.remove();
+      renumber(body);
+      return;
+    }
+
+    var add = event.target.closest(".add-row");
+    if (!add) { return; }
+    var table = add.previousElementSibling;
+    if (!table || !table.classList.contains("row-table")) { return; }
+    var tbody = table.querySelector("tbody");
+    var rows = tbody.querySelectorAll(".row-item");
+    if (rows.length >= {{ max_rows }}) { add.disabled = true; return; }
+
+    var next = rows[rows.length - 1].cloneNode(true);
+    next.querySelectorAll("[name]").forEach(function (field) {
+      if (field.tagName === "INPUT") { field.value = ""; } else { field.selectedIndex = 0; }
+    });
+    tbody.appendChild(next);
+    renumber(tbody);
+  });
+})();
+</script>
+{% endblock %}
