@@ -15,7 +15,7 @@ Read in this order before writing code:
 2. `docs/GUIDE.md` — the design spec. Prototyped and discarded once
    already, so the guide is more trustworthy than any implementation.
 3. `docs/STATUS.md` — what's actually built (the guide doesn't track
-   progress), including the webapp's known gaps (no CSRF protection, no
+   progress), including the webapp's known gaps (no rate limiting, no
    email verification, etc.) before it could go anywhere near public.
 4. `docs/AUDIT.md` — what was cut and why.
 
@@ -23,10 +23,14 @@ Layout:
 
     src/training/advisor.py              scoring: ewma_score, advise, recommend, AdvisorConfig
     src/training/exercises.json          the exercise dictionary (authored, not fitted)
-    src/training/db.py, schema.sql       SQLite layer: users > sessions > blocks > sets
+    src/training/db.py, schema.sql       SQLite layer: users > sessions > blocks > sets (+ parse_runs/parse_outcomes)
+    src/training/pg.py                   Postgres behind db.py's sqlite3-style calls (hosted version only)
     src/training/user_config.py          friendly per-user settings -> AdvisorConfig
     src/training/simulate.py             synthetic-schedule simulation -> data/
     src/training/webapp/                 FastAPI + Jinja2 app (server-rendered, no SPA)
+    src/training/webapp/parse_entry.py   LLM-assisted logging: note/photo -> draft pieces -> pre-filled log form
+    scripts/check_parser.py              sends sample notes to the real parser (needs ANTHROPIC_API_KEY)
+    render.yaml                          hosted test version (Render + a Postgres URL, e.g. Neon)
     tests/                               pytest, all offline
     docs/                                GUIDE, STATUS, AUDIT, ROADMAP, math.tex (formal spec of advisor.py)
     data/                                webapp.db (gitignored, personal) + simulation output
@@ -34,7 +38,7 @@ Layout:
 
 Commands:
 
-    pip install -e .[dev]                                # once per venv
+    pip install -e .[dev]                                # once per venv (add ,llm for note parsing)
     python -m pytest -q                                  # run tests
     tracker.bat                                          # launch the webapp, or:
     python -m uvicorn training.webapp.app:app --reload   # from an activated .venv
@@ -175,6 +179,36 @@ Things that will otherwise be got wrong:
   consecutive-run fallback.
 - **Webapp tests assert behaviour, not exact HTML.** Exact-HTML assertions
   broke on every restyle; prefer checking `/coverage` numbers.
+- **The note parser never writes to the log.** `parse_entry.py` turns a
+  note or photo into draft pieces that *pre-fill* the ordinary `/log`
+  form; the person presses Log, and the piece goes through the same
+  validation and `session_templates` expansion as a hand-filled one. Don't
+  add a path that commits a draft directly.
+- **The parser never maps an unknown exercise to a near match.** Anything
+  not in `exercises.json` comes back as `unresolved_name`, the row is left
+  blank, and the name is counted on `/admin`. That's the evidence for the
+  "add exercises on contact with real logging" rule above - a parser that
+  quietly substituted would hide exactly that signal.
+- **A parsed style is a pre-select, like the load-based guess.** It's
+  checked against `admissible_styles` afterwards (falling back to the
+  form's usual default, with a note), because the structured-outputs
+  schema can't express per-exercise enums.
+- **The parser's schema must stay within the structured-outputs subset**
+  (no numeric bounds, no oneOf/if-then, `additionalProperties: false` on
+  every object). `test_schema_stays_within_structured_outputs_subset` pins
+  it; the API rejects anything else with a 400.
+- **`parse_runs`/`parse_outcomes` are evaluation data, not log.** Nothing
+  in scoring reads them. `edited` compares the form as pre-filled with the
+  form as submitted (`parse_entry.comparable`).
+- **db.py stays sqlite3-style; Postgres comes through `pg.py`.** Keep SQL
+  portable (`?` placeholders, no SQLite-only functions or `PRAGMA` outside
+  `_table_columns`). A new table with an `id` column needs adding to
+  `pg._INSERT_WITH_ID`, or `lastrowid` is None on Postgres. To check a
+  change against Postgres, run `tests/test_pg.py` with `TEST_DATABASE_URL`
+  set.
+- **Hosted settings come from environment variables** (listed in
+  `webapp/app.py`'s docstring). `TRAINING_SECRET_KEY` is required once
+  `TRAINING_DATABASE_URL` is set - the app refuses to start without it.
 
 How to work here:
 

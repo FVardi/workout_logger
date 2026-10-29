@@ -106,3 +106,9 @@ select.style-guessed { border-left: 3px solid var(--app-link-color); }
 /* --- Auth pages --------------------------------------------------------- */
 
 .auth-card { max-width: 24rem; margin: 4rem auto; }
+
+/* LLM-assisted logging (log_session.html) */
+.parse-banner ul { padding-left: 1.2rem; }
+.note-text { white-space: pre-wrap; font-size: 0.85rem; background: transparent; border: 0; padding: 0.25rem 0 0; }
+.admin-json { max-height: 28rem; overflow: auto; font-size: 0.8rem; background: #f6f6f7; padding: 0.75rem; border-radius: 0.25rem; }
+.admin-photo { max-width: 100%; border: 1px solid #dee2e6; border-radius: 0.25rem; }

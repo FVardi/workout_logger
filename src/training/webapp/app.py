@@ -11,36 +11,58 @@ Environment variables:
     TRAINING_DB_PATH     - sqlite file path (default: data/webapp.db,
                             gitignored - this is personal training data)
     TRAINING_SECRET_KEY  - session-cookie signing key. The default is fine
-                            for local dev only; set a real one before ever
-                            deploying this publicly (see docs/STATUS.md).
+                            for local dev only; required once
+                            TRAINING_DATABASE_URL is set (see docs/STATUS.md).
+
+    Hosted version (all optional locally):
+    TRAINING_DATABASE_URL   - postgresql:// URL; takes precedence over
+                              TRAINING_DB_PATH (see training/pg.py)
+    TRAINING_SECURE_COOKIES - "1" to send the session cookie over https only
+    TRAINING_INVITE_CODE    - when set, sign-up requires it
+    TRAINING_ADMIN_EMAILS   - comma-separated; these accounts see /admin
+    ANTHROPIC_API_KEY       - turns on LLM-assisted logging (parse_entry.py);
+                              TRAINING_PARSER=fake|off overrides
+    TRAINING_PARSER_MODEL   - default claude-haiku-5-5
+    TRAINING_PARSES_PER_DAY - per-user cap on parses, default 40
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
-from datetime import date, datetime, timedelta
+import secrets
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import advisor, db, user_config
-from . import auth, session_templates
+from . import auth, parse_entry, session_templates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DB_PATH = REPO_ROOT / "data" / "webapp.db"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
+DATABASE_URL = os.environ.get("TRAINING_DATABASE_URL", "").strip()
+SECRET_KEY = os.environ.get("TRAINING_SECRET_KEY", "")
+if DATABASE_URL and not SECRET_KEY:
+    # A hosted database means a hosted app; the dev default would let anyone
+    # who has read this file forge a login cookie.
+    raise RuntimeError("TRAINING_SECRET_KEY must be set when TRAINING_DATABASE_URL is.")
+
 app = FastAPI(title="Training Advisor")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("TRAINING_SECRET_KEY", "dev-only-insecure-secret-change-me"),
+    secret_key=SECRET_KEY or "dev-only-insecure-secret-change-me",
+    same_site="lax",
+    https_only=os.environ.get("TRAINING_SECURE_COOKIES") == "1",
 )
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -49,8 +71,9 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 def get_conn():
-    path = os.environ.get("TRAINING_DB_PATH", str(DEFAULT_DB_PATH))
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    path = os.environ.get("TRAINING_DATABASE_URL") or os.environ.get("TRAINING_DB_PATH", str(DEFAULT_DB_PATH))
+    if not path.startswith(("postgres://", "postgresql://")):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(path)
     try:
         yield conn
@@ -83,9 +106,32 @@ def _require_login(request: Request) -> int | RedirectResponse:
 
 # --- Auth ----------------------------------------------------------------------
 
+def _admin_emails() -> set[str]:
+    raw = os.environ.get("TRAINING_ADMIN_EMAILS", "")
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def _signup_context(error=None) -> dict:
+    return {
+        "error": error,
+        "invite_required": bool(os.environ.get("TRAINING_INVITE_CODE")),
+        # Said on the sign-up page whenever either applies, so nobody joins
+        # without knowing who can read their log or where their notes go.
+        "admin_can_read": bool(_admin_emails()),
+        "uses_llm": parse_entry.backend() == "anthropic",
+    }
+
+
+def _start_session(request: Request, user_id: int, email: str) -> None:
+    request.session["user_id"] = user_id
+    # Only decides whether the nav shows the Admin link; the admin routes
+    # re-check the email against TRAINING_ADMIN_EMAILS themselves.
+    request.session["is_admin"] = email in _admin_emails()
+
+
 @app.get("/signup", response_class=HTMLResponse)
 def signup_form(request: Request):
-    return templates.TemplateResponse(request, "signup.html", {"error": None})
+    return templates.TemplateResponse(request, "signup.html", _signup_context())
 
 
 @app.post("/signup")
@@ -93,24 +139,30 @@ def signup(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    invite_code: str = Form(""),
     conn=Depends(get_conn),
 ):
     email = email.strip().lower()
+    expected = os.environ.get("TRAINING_INVITE_CODE", "")
+    if expected and not secrets.compare_digest(invite_code.strip().encode(), expected.encode()):
+        return templates.TemplateResponse(
+            request, "signup.html", _signup_context("That invite code isn't right."), status_code=400,
+        )
     if len(password) < 8:
         return templates.TemplateResponse(
-            request, "signup.html", {"error": "Password must be at least 8 characters."}, status_code=400,
+            request, "signup.html", _signup_context("Password must be at least 8 characters."), status_code=400,
         )
     if auth.password_too_long(password):
-        return templates.TemplateResponse(request, "signup.html", {
-            "error": f"Password must be at most {auth.MAX_PASSWORD_BYTES} bytes "
-                     "(bcrypt's own limit - most passwords are well under this).",
-        }, status_code=400)
+        return templates.TemplateResponse(request, "signup.html", _signup_context(
+            f"Password must be at most {auth.MAX_PASSWORD_BYTES} bytes "
+            "(bcrypt's own limit - most passwords are well under this)."
+        ), status_code=400)
     if db.get_user_by_email(conn, email) is not None:
         return templates.TemplateResponse(
-            request, "signup.html", {"error": "That email is already registered."}, status_code=400,
+            request, "signup.html", _signup_context("That email is already registered."), status_code=400,
         )
     user_id = db.create_user(conn, email, auth.hash_password(password))
-    request.session["user_id"] = user_id
+    _start_session(request, user_id, email)
     return RedirectResponse("/", status_code=303)
 
 
@@ -131,7 +183,7 @@ def login(
         return templates.TemplateResponse(
             request, "login.html", {"error": "Wrong email or password."}, status_code=400,
         )
-    request.session["user_id"] = row["id"]
+    _start_session(request, row["id"], row["email"])
     return RedirectResponse("/", status_code=303)
 
 
@@ -289,7 +341,7 @@ def _with_volume_text(pieces: list[dict], dictionary) -> list[dict]:
 
 
 def _log_page_context(
-    request, conn, dictionary, user_id, error=None, active="strength", on_date=None,
+    request, conn, dictionary, user_id, error=None, active="strength", on_date=None, parse_ref=None,
 ):
     """Everything the log page needs, including that day's progress so far.
 
@@ -320,7 +372,19 @@ def _log_page_context(
             "heaviest": db.heaviest_load_for_exercise(conn, user_id, ex.id),
         }
 
+    # A draft piece from parse_entry pre-fills one of the forms below; the
+    # person checks it and logs it like any other piece.
+    parse_ctx = None
+    if parse_ref is not None:
+        parse_ctx = _parse_context(conn, dictionary, user_id, *parse_ref, style_info, on_date)
+        if parse_ctx is not None:
+            active = parse_ctx["prefill"]["template"]
+            on_date = parse_ctx["prefill"]["fields"]["date"]
+    prefilled_rows = parse_ctx["rows"] if parse_ctx else 0
+
     return {
+        "parse_ctx": parse_ctx,
+        "parse_enabled": parse_entry.backend() is not None,
         "exercises": exercises,
         "styles": dictionary.styles,
         "style_labels": STYLE_LABELS,
@@ -333,8 +397,8 @@ def _log_page_context(
         "on_date": on_date,
         "today": today_str,
         "max_date": (date.today() + timedelta(days=1)).isoformat(),
-        "set_rows": range(INITIAL_SET_ROWS),
-        "movement_rows": range(INITIAL_MOVEMENT_ROWS),
+        "set_rows": range(max(INITIAL_SET_ROWS, prefilled_rows)),
+        "movement_rows": range(max(INITIAL_MOVEMENT_ROWS, prefilled_rows)),
         "max_rows": max(MAX_SET_ROWS, MAX_MOVEMENT_ROWS),
         "units": UNITS,
         "templates": TEMPLATES,
@@ -356,6 +420,8 @@ def log_form(
     request: Request,
     template: str = "strength",
     date: str | None = None,
+    parse: int | None = None,
+    piece: int = 0,
     conn=Depends(get_conn),
     dictionary=Depends(get_dictionary),
 ):
@@ -367,8 +433,135 @@ def log_form(
         on_date = _parse_log_date(date)
     except session_templates.TemplateError:
         on_date = None  # a nonsense ?date= falls back to today rather than erroring
-    ctx = _log_page_context(request, conn, dictionary, user_id, active=active, on_date=on_date)
+    ctx = _log_page_context(request, conn, dictionary, user_id, active=active, on_date=on_date,
+                            parse_ref=(parse, piece) if parse is not None else None)
     return templates.TemplateResponse(request, "log_session.html", ctx)
+
+
+# --- LLM-assisted logging ------------------------------------------------------------
+
+def _parse_context(conn, dictionary, user_id, run_id, piece_index, style_info, on_date) -> dict | None:
+    """Everything the log page needs to show draft piece `piece_index` of a
+    parse run: the pre-fill, the run's "check these" lines, and where it
+    sits in the run. None if the run isn't this user's or has no such piece.
+    """
+    run = db.get_parse_run(conn, run_id, user_id=user_id)
+    if run is None or not run["output_json"]:
+        return None
+    draft = json.loads(run["output_json"])
+    pieces = draft.get("pieces") or []
+    if not 0 <= piece_index < len(pieces):
+        return None
+
+    date_str = on_date or date.today().isoformat()
+    if draft.get("date"):
+        try:
+            date_str = _parse_log_date(draft["date"])
+        except session_templates.TemplateError:
+            pass  # a future or unreadable date in the note: keep the default, the form shows it
+
+    def default_style(exercise_id):
+        return style_info[exercise_id]["default"]
+
+    prefill = parse_entry.draft_to_prefill(pieces[piece_index], dictionary, default_style, date_str)
+    rows = max((int(k[1:k.index("_")]) + 1 for k in prefill.fields if k[:1] in "ms" and "_" in k
+                and k[1:k.index("_")].isdigit()), default=0)
+    return {
+        "run_id": run_id,
+        "piece_index": piece_index,
+        "piece_count": len(pieces),
+        "prefill": prefill.to_dict(),
+        "uncertain": draft.get("uncertain") or [],
+        "raw_text": run["raw_text"],
+        "has_image": run["image_type"] is not None,
+        "rows": rows,
+    }
+
+
+def _parse_next_url(run_id: int, piece_index: int, piece_count: int, template: str, on_date: str) -> str:
+    if piece_index + 1 < piece_count:
+        return f"/log?parse={run_id}&piece={piece_index + 1}"
+    return f"/log?template={template}&date={on_date}"
+
+
+@app.post("/log/parse")
+async def log_parse(
+    request: Request,
+    text: str = Form(""),
+    image: UploadFile | None = File(None),
+    conn=Depends(get_conn),
+    dictionary=Depends(get_dictionary),
+):
+    """A note or photo -> a parse run -> the first draft piece in the form."""
+    user_id = _require_login(request)
+    if isinstance(user_id, RedirectResponse):
+        return user_id
+
+    def fail(message, status=400):
+        ctx = _log_page_context(request, conn, dictionary, user_id, error=message)
+        ctx["note_text"] = text
+        return templates.TemplateResponse(request, "log_session.html", ctx, status_code=status)
+
+    if parse_entry.backend() is None:
+        return fail("Logging from a note isn't switched on here.")
+    limit = int(os.environ.get("TRAINING_PARSES_PER_DAY", "40"))
+    # parse_runs.created_at is UTC ISO text, so compare against local midnight in UTC.
+    midnight = (datetime.combine(date.today(), datetime.min.time()).astimezone()
+                .astimezone(timezone.utc).isoformat(timespec="seconds"))
+    if db.count_parse_runs_since(conn, user_id, midnight) >= limit:
+        return fail(f"You've reached today's limit of {limit} notes. You can still log with the form.", 429)
+
+    img = None
+    if image is not None and image.filename:
+        data = await image.read()
+        if image.content_type not in parse_entry.ALLOWED_IMAGE_TYPES:
+            return fail("Use a JPEG, PNG, WebP or GIF photo.")
+        if len(data) > parse_entry.MAX_IMAGE_BYTES:
+            return fail("That photo is over 5 MB. Try a smaller one.")
+        img = (data, image.content_type)
+    if not text.strip() and img is None:
+        return fail("Write what you did, or add a photo.")
+
+    result = parse_entry.parse(text, img, dictionary, date.today())
+    run_id = db.create_parse_run(
+        conn, user_id, "photo" if img else "text", text, result.model, parse_entry.PROMPT_VERSION,
+        json.dumps(result.draft) if result.draft is not None else None, result.error,
+        latency_ms=result.latency_ms, input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+        image_type=img[1] if img else None, image_bytes=img[0] if img else None,
+    )
+    if not result.ok:
+        return fail(f"Couldn't read that note ({result.error}). Try rephrasing, or use the form.", 502)
+    return RedirectResponse(f"/log?parse={run_id}&piece=0", status_code=303)
+
+
+@app.post("/log/parse/skip")
+def log_parse_skip(
+    request: Request,
+    parse_run_id: int = Form(...),
+    piece_index: int = Form(...),
+    prefill_json: str = Form("{}"),
+    conn=Depends(get_conn),
+):
+    """Drop one draft piece without logging it, and move to the next."""
+    user_id = _require_login(request)
+    if isinstance(user_id, RedirectResponse):
+        return user_id
+    run = db.get_parse_run(conn, parse_run_id, user_id=user_id)
+    if run is None:
+        return RedirectResponse("/log", status_code=303)
+    count = len(json.loads(run["output_json"] or "{}").get("pieces") or [])
+    db.record_parse_outcome(conn, parse_run_id, piece_index, "skipped",
+                            _safe_json(prefill_json), None, None)
+    return RedirectResponse(_parse_next_url(parse_run_id, piece_index, count, "strength",
+                                            date.today().isoformat()), status_code=303)
+
+
+def _safe_json(raw: str) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _validate_style(dictionary, exercise_id: str, style: str) -> None:
@@ -544,6 +737,12 @@ async def log_piece(
 
     form = await request.form()
     template = (form.get("template") or "strength").strip()
+    parse_ref = None
+    if (form.get("parse_run_id") or "").strip():
+        try:
+            parse_ref = (int(form.get("parse_run_id")), int(form.get("piece_index") or 0))
+        except ValueError:
+            parse_ref = None
 
     try:
         on_date = _parse_log_date(form.get("date"))
@@ -603,18 +802,31 @@ async def log_piece(
             raise session_templates.TemplateError(f"Unknown template {template!r}.")
 
     except session_templates.TemplateError as exc:
-        ctx = _log_page_context(request, conn, dictionary, user_id, error=str(exc), active=template)
+        ctx = _log_page_context(request, conn, dictionary, user_id, error=str(exc), active=template,
+                                parse_ref=parse_ref)
         return templates.TemplateResponse(request, "log_session.html", ctx, status_code=400)
     except ValueError:
         ctx = _log_page_context(
             request, conn, dictionary, user_id,
             error="Couldn't read one of the numbers - check the form and try again.",
-            active=template,
+            active=template, parse_ref=parse_ref,
         )
         return templates.TemplateResponse(request, "log_session.html", ctx, status_code=400)
 
     _commit_blocks(conn, dictionary, user_id, blocks, on_date=on_date,
                    result_seconds=result_seconds)
+
+    if parse_ref is not None:
+        run = db.get_parse_run(conn, parse_ref[0], user_id=user_id)
+        if run is not None:
+            prefill = _safe_json(form.get("prefill_json") or "{}")
+            submitted = {k: v for k, v in form.items()
+                         if k not in ("parse_run_id", "piece_index", "prefill_json") and isinstance(v, str)}
+            edited = parse_entry.comparable(prefill) != parse_entry.comparable(submitted)
+            db.record_parse_outcome(conn, parse_ref[0], parse_ref[1], "logged", prefill, submitted, edited)
+            count = len(json.loads(run["output_json"] or "{}").get("pieces") or [])
+            return RedirectResponse(_parse_next_url(parse_ref[0], parse_ref[1], count, template, on_date),
+                                    status_code=303)
     return RedirectResponse(f"/log?template={template}&date={on_date}", status_code=303)
 
 
@@ -913,3 +1125,142 @@ def save_settings(
         return user_id
     db.save_user_settings(conn, user_id, volume_multiplier, conditioning_focus, disabled_styles)
     return RedirectResponse("/settings", status_code=303)
+
+
+# --- Admin -------------------------------------------------------------------------
+#
+# For running the app with a few testers: who's signed up, their logs
+# (read-only), and how well the note parser is doing. Admins are the
+# accounts listed in TRAINING_ADMIN_EMAILS; the session's is_admin flag only
+# shows the nav link, and every route here re-checks the email.
+
+def _require_admin(request: Request, conn) -> int | Response:
+    user_id = _require_login(request)
+    if isinstance(user_id, RedirectResponse):
+        return user_id
+    row = db.get_user_by_id(conn, user_id)
+    if row is None or row["email"] not in _admin_emails():
+        return HTMLResponse("Admins only.", status_code=403)
+    return user_id
+
+
+def _parse_stats(runs: list[dict]) -> dict:
+    outcomes = [o for r in runs for o in r["outcomes"]]
+    logged = [o for o in outcomes if o["action"] == "logged"]
+    unknown: dict[str, int] = {}
+    pieces = 0
+    for r in runs:
+        draft = json.loads(r["output_json"]) if r["output_json"] else {}
+        for piece in draft.get("pieces") or []:
+            pieces += 1
+            items = [piece, *(piece.get("movements") or [])]
+            for item in items:
+                if item.get("unresolved_name") and not item.get("exercise_id"):
+                    name = item["unresolved_name"].strip().lower()
+                    unknown[name] = unknown.get(name, 0) + 1
+    latencies = sorted(r["latency_ms"] for r in runs if r["latency_ms"] and r["model"] != "fake")
+    return {
+        "runs": len(runs),
+        "errors": sum(1 for r in runs if r["error"]),
+        "pieces": pieces,
+        "logged": len(logged),
+        "unedited": sum(1 for o in logged if not o["edited"]),
+        "skipped": sum(1 for o in outcomes if o["action"] == "skipped"),
+        "median_latency_s": latencies[len(latencies) // 2] / 1000 if latencies else None,
+        "tokens_in": sum(r["input_tokens"] or 0 for r in runs),
+        "tokens_out": sum(r["output_tokens"] or 0 for r in runs),
+        "unknown": sorted(unknown.items(), key=lambda kv: (-kv[1], kv[0])),
+    }
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_home(request: Request, conn=Depends(get_conn)):
+    admin_id = _require_admin(request, conn)
+    if isinstance(admin_id, Response):
+        return admin_id
+    runs = db.list_parse_runs(conn)
+    emails = {u["id"]: u["email"] for u in db.users_overview(conn)}
+    return templates.TemplateResponse(request, "admin.html", {
+        "users": db.users_overview(conn),
+        "runs": runs[:50],
+        "emails": emails,
+        "stats": _parse_stats(runs),
+        "parser": parse_entry.backend(),
+        "active_nav": "admin",
+    })
+
+
+@app.get("/admin/users/{uid}", response_class=HTMLResponse)
+def admin_user_history(uid: int, request: Request, conn=Depends(get_conn), dictionary=Depends(get_dictionary)):
+    admin_id = _require_admin(request, conn)
+    if isinstance(admin_id, Response):
+        return admin_id
+    row = db.get_user_by_id(conn, uid)
+    if row is None:
+        return HTMLResponse("No such user.", status_code=404)
+    return templates.TemplateResponse(request, "history.html", {
+        "pieces": _with_volume_text(db.fetch_pieces(conn, uid), dictionary),
+        "viewing": row["email"],
+        "active_nav": "admin",
+    })
+
+
+@app.get("/admin/parse/{run_id}", response_class=HTMLResponse)
+def admin_parse_run(run_id: int, request: Request, conn=Depends(get_conn)):
+    admin_id = _require_admin(request, conn)
+    if isinstance(admin_id, Response):
+        return admin_id
+    run = db.get_parse_run(conn, run_id)
+    if run is None:
+        return HTMLResponse("No such parse run.", status_code=404)
+    owner = db.get_user_by_id(conn, run["user_id"])
+    outcomes = db.parse_outcomes(conn, run_id)
+    for o in outcomes:
+        prefill = parse_entry.comparable(json.loads(o["prefill_json"] or "{}"))
+        submitted = parse_entry.comparable(json.loads(o["submitted_json"] or "{}")) if o["submitted_json"] else {}
+        o["changes"] = [
+            (key, prefill.get(key, ""), submitted.get(key, ""))
+            for key in sorted(set(prefill) | set(submitted))
+            if o["submitted_json"] and prefill.get(key, "") != submitted.get(key, "")
+        ]
+    draft = json.loads(run["output_json"]) if run["output_json"] else None
+    return templates.TemplateResponse(request, "admin_parse.html", {
+        "run": run,
+        "owner": owner["email"] if owner else "?",
+        "draft": json.dumps(draft, indent=2, ensure_ascii=False) if draft is not None else None,
+        "outcomes": outcomes,
+        "active_nav": "admin",
+    })
+
+
+@app.get("/admin/parse/{run_id}/image")
+def admin_parse_image(run_id: int, request: Request, conn=Depends(get_conn)):
+    admin_id = _require_admin(request, conn)
+    if isinstance(admin_id, Response):
+        return admin_id
+    image = db.get_parse_image(conn, run_id)
+    if image is None:
+        return HTMLResponse("No image.", status_code=404)
+    return Response(image[1], media_type=image[0])
+
+
+@app.get("/admin/export.json")
+def admin_export(request: Request, conn=Depends(get_conn)):
+    """Every parse run with its draft and what became of each piece - the
+    parser's evaluation set, built from real use."""
+    admin_id = _require_admin(request, conn)
+    if isinstance(admin_id, Response):
+        return admin_id
+    out = []
+    for run in db.list_parse_runs(conn, limit=100000):
+        out.append({
+            **{k: run[k] for k in ("id", "user_id", "created_at", "input_kind", "raw_text", "model",
+                                   "prompt_version", "error", "latency_ms", "input_tokens", "output_tokens")},
+            "has_image": run["image_type"] is not None,
+            "draft": json.loads(run["output_json"]) if run["output_json"] else None,
+            "outcomes": [{**o, "prefill_json": None, "submitted_json": None,
+                          "prefill": json.loads(o["prefill_json"] or "{}"),
+                          "submitted": json.loads(o["submitted_json"]) if o["submitted_json"] else None}
+                         for o in run["outcomes"]],
+        })
+    return JSONResponse(out, headers={"Content-Disposition": "attachment; filename=parse_eval.json"})

@@ -82,3 +82,43 @@ CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- users.email already has an implicit unique index from its UNIQUE constraint.
+
+-- LLM-assisted logging (webapp/parse_entry.py). A parse run is one free-text
+-- note or photo turned into draft pieces; each draft piece then pre-fills
+-- the ordinary log form, and parse_outcomes records what the person did
+-- with it. Kept as evaluation data for the parser - nothing in scoring reads
+-- either table. The image is stored in the database rather than on disk
+-- because the hosted version has no persistent disk.
+CREATE TABLE IF NOT EXISTS parse_runs (
+    id             INTEGER PRIMARY KEY,
+    user_id        INTEGER NOT NULL REFERENCES users(id),
+    created_at     TEXT NOT NULL,
+    input_kind     TEXT NOT NULL CHECK (input_kind IN ('text', 'photo')),
+    raw_text       TEXT NOT NULL,
+    image_type     TEXT,
+    image_bytes    BLOB,
+    model          TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    output_json    TEXT,      -- the parser's draft, as returned
+    error          TEXT,
+    latency_ms     INTEGER,
+    input_tokens   INTEGER,
+    output_tokens  INTEGER
+);
+
+-- One row per draft piece the person acted on. `edited` compares the form
+-- as pre-filled with the form as submitted (blank rows ignored), so the
+-- share of unedited pieces is the parser's accuracy as experienced.
+CREATE TABLE IF NOT EXISTS parse_outcomes (
+    id             INTEGER PRIMARY KEY,
+    parse_run_id   INTEGER NOT NULL REFERENCES parse_runs(id),
+    piece_index    INTEGER NOT NULL,
+    action         TEXT NOT NULL CHECK (action IN ('logged', 'skipped')),
+    prefill_json   TEXT NOT NULL,
+    submitted_json TEXT,
+    edited         INTEGER,   -- 0/1; NULL when skipped
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_runs_user ON parse_runs(user_id);
+CREATE INDEX IF NOT EXISTS idx_parse_outcomes_run ON parse_outcomes(parse_run_id);

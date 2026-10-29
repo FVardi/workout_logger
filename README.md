@@ -13,3 +13,28 @@ shows today's suggestions.
 
 Your log lives in `data/webapp.db` (gitignored). Design: `docs/GUIDE.md`.
 What's built: `docs/STATUS.md`. What was cut and why: `docs/AUDIT.md`.
+
+## Hosted test version
+
+Invite-only, for a few testers. Free tiers: the app on Render, the
+database on Neon (Postgres). Details and caveats: `docs/STATUS.md`,
+"Webapp".
+
+1. Create a free Neon project and copy its connection string.
+2. Get an Anthropic API key (console.anthropic.com / platform.claude.com)
+   with a little credit, and check the parser first:
+
+       pip install -e .[dev,llm]
+       set ANTHROPIC_API_KEY=sk-ant-...
+       python scripts/check_parser.py
+
+3. On Render: New → Blueprint → this repository. It reads `render.yaml`
+   and asks for `TRAINING_DATABASE_URL` (the Neon string),
+   `TRAINING_INVITE_CODE`, `TRAINING_ADMIN_EMAILS` (your email) and
+   `ANTHROPIC_API_KEY`. The secret key is generated.
+4. Sign up first with your admin email, then send friends the URL and the
+   invite code. `/admin` shows who's logging and how well notes are read.
+
+Locally nothing changes: no environment variables means SQLite in
+`data/webapp.db` and no note box. To try note parsing locally, install
+`.[llm]` and set `ANTHROPIC_API_KEY` before `tracker.bat`.

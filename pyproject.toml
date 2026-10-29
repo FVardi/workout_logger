@@ -28,6 +28,15 @@ dev = [
 sim = [
     "openpyxl>=3.1",
 ]
+# LLM-assisted logging (src/training/webapp/parse_entry.py). Without it the
+# app works as before, with the note box hidden.
+llm = [
+    "anthropic>=2.3",
+]
+# The hosted version's database (src/training/pg.py). Local use stays on SQLite.
+postgres = [
+    "psycopg[binary,pool]>=3.2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import date as Date, datetime, timezone
 from pathlib import Path
 
+from . import pg
+
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
@@ -34,6 +36,16 @@ _ADDED_COLUMNS = {
 }
 
 
+def _is_postgres(conn) -> bool:
+    return getattr(conn, "dialect", "sqlite") == "postgres"
+
+
+def _table_columns(conn, table: str) -> set[str]:
+    if _is_postgres(conn):
+        return pg.table_columns(conn, table)
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent, additive-only schema catch-up for databases created
     before a column existed. Runs on every connect; each step is a no-op
@@ -41,9 +53,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     rewrites a column, so it can't lose logged data.
     """
     for table, columns in _ADDED_COLUMNS.items():
-        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        existing = _table_columns(conn, table)
         for column, sql_type in columns.items():
             if column not in existing:
+                if _is_postgres(conn) and sql_type == "REAL":
+                    sql_type = "DOUBLE PRECISION"
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
     conn.commit()
     _backfill_piece_groups(conn)
@@ -101,7 +115,30 @@ def _backfill_piece_groups(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# Postgres URLs whose schema has been created/migrated by this process.
+# SQLite re-runs the (cheap, local) setup on every connect as before; a
+# hosted Postgres is a network round trip per statement, so it runs once.
+_pg_ready: set[str] = set()
+
+
 def connect(path: str = ":memory:") -> sqlite3.Connection:
+    """A connection to the log. `path` is a SQLite file (or ":memory:"), or
+    a postgresql:// URL for the hosted version - see training.pg, which
+    makes Postgres answer the same sqlite3-style calls used throughout this
+    module.
+    """
+    if pg.is_postgres_url(path):
+        conn = pg.connect(path)
+        if path not in _pg_ready:
+            conn.executescript(pg.schema_for_postgres(SCHEMA_PATH.read_text()))
+            conn.commit()
+            _migrate(conn)
+            _pg_ready.add(path)
+        return conn
+    return _connect_sqlite(path)
+
+
+def _connect_sqlite(path: str) -> sqlite3.Connection:
     # check_same_thread=False because FastAPI resolves sync dependencies in a
     # threadpool but runs `async def` endpoints on the event loop thread, so a
     # connection opened by the dependency is used from a different thread than
@@ -486,3 +523,119 @@ def fetch_sets(conn: sqlite3.Connection, user_id: int, since: str | None = None)
         )
         for r in rows
     ]
+
+
+# --- LLM-assisted logging ----------------------------------------------------
+#
+# Evaluation data for webapp/parse_entry.py. Nothing in scoring reads these.
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def create_parse_run(
+    conn: sqlite3.Connection,
+    user_id: int,
+    input_kind: str,
+    raw_text: str,
+    model: str,
+    prompt_version: str,
+    output_json: str | None,
+    error: str | None,
+    latency_ms: int | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    image_type: str | None = None,
+    image_bytes: bytes | None = None,
+) -> int:
+    cur = conn.execute(
+        """INSERT INTO parse_runs
+           (user_id, created_at, input_kind, raw_text, image_type, image_bytes, model,
+            prompt_version, output_json, error, latency_ms, input_tokens, output_tokens)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, _now(), input_kind, raw_text, image_type, image_bytes, model, prompt_version,
+         output_json, error, latency_ms, input_tokens, output_tokens),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+_PARSE_RUN_COLUMNS = """id, user_id, created_at, input_kind, raw_text, image_type, model,
+    prompt_version, output_json, error, latency_ms, input_tokens, output_tokens"""
+
+
+def get_parse_run(conn: sqlite3.Connection, run_id: int, user_id: int | None = None) -> dict | None:
+    """One parse run (without the image bytes). Scoped to `user_id` unless
+    it's None, which only the admin pages pass."""
+    query = f"SELECT {_PARSE_RUN_COLUMNS} FROM parse_runs WHERE id = ?"
+    params: tuple = (run_id,)
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params = (run_id, user_id)
+    row = conn.execute(query, params).fetchone()
+    return dict(row) if row else None
+
+
+def get_parse_image(conn: sqlite3.Connection, run_id: int) -> tuple[str, bytes] | None:
+    row = conn.execute(
+        "SELECT image_type, image_bytes FROM parse_runs WHERE id = ? AND image_type IS NOT NULL",
+        (run_id,),
+    ).fetchone()
+    return (row["image_type"], bytes(row["image_bytes"])) if row else None
+
+
+def count_parse_runs_since(conn: sqlite3.Connection, user_id: int, since_iso: str) -> int:
+    (n,) = conn.execute(
+        "SELECT COUNT(*) FROM parse_runs WHERE user_id = ? AND created_at >= ?", (user_id, since_iso)
+    ).fetchone()
+    return n
+
+
+def record_parse_outcome(
+    conn: sqlite3.Connection,
+    parse_run_id: int,
+    piece_index: int,
+    action: str,
+    prefill: dict,
+    submitted: dict | None,
+    edited: bool | None,
+) -> None:
+    conn.execute(
+        """INSERT INTO parse_outcomes
+           (parse_run_id, piece_index, action, prefill_json, submitted_json, edited, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (parse_run_id, piece_index, action, json.dumps(prefill),
+         json.dumps(submitted) if submitted is not None else None,
+         None if edited is None else int(edited), _now()),
+    )
+    conn.commit()
+
+
+def parse_outcomes(conn: sqlite3.Connection, parse_run_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM parse_outcomes WHERE parse_run_id = ? ORDER BY piece_index, id",
+        (parse_run_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_parse_runs(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
+    """Newest first, across all users - admin only."""
+    rows = conn.execute(
+        f"""SELECT {_PARSE_RUN_COLUMNS} FROM parse_runs ORDER BY id DESC LIMIT ?""", (limit,)
+    ).fetchall()
+    runs = [dict(r) for r in rows]
+    for run in runs:
+        run["outcomes"] = parse_outcomes(conn, run["id"])
+    return runs
+
+
+def users_overview(conn: sqlite3.Connection) -> list[dict]:
+    """Every user with how much they've logged and parsed - admin only."""
+    rows = conn.execute(
+        """SELECT users.id AS id, users.email AS email, users.created_at AS created_at,
+                  (SELECT COUNT(*) FROM sessions WHERE sessions.user_id = users.id) AS sessions,
+                  (SELECT COUNT(*) FROM parse_runs WHERE parse_runs.user_id = users.id) AS parses
+           FROM users ORDER BY users.id"""
+    ).fetchall()
+    return [dict(r) for r in rows]

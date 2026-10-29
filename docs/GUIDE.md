@@ -559,6 +559,12 @@ piece it sits in.
 user, while the exercise dictionary stays global. See
 `docs/STATUS.md`.
 
+`parse_runs` and `parse_outcomes` sit beside the log, not in it: they
+record notes turned into draft pieces by the LLM-assisted logging and what
+the person did with each draft. Evaluation data for the parser; nothing in
+scoring reads them, and a draft only becomes log once it has been
+submitted through the ordinary form.
+
 Store the exercise dictionary as **versioned JSON** and stamp each log row
 with the dictionary version. Retuning a pattern weight later would
 otherwise silently rewrite history; with a version stamp you can choose

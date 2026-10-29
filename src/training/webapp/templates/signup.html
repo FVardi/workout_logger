@@ -25,8 +25,21 @@
              required minlength="8" maxlength="72">
       <div class="form-text">At least 8 characters.</div>
     </div>
+    {% if invite_required %}
+    <div class="mb-3">
+      <label class="form-label" for="invite_code">Invite code</label>
+      <input class="form-control" type="text" id="invite_code" name="invite_code" required autocomplete="off">
+    </div>
+    {% endif %}
     <button class="btn btn-primary w-100" type="submit">Sign up</button>
   </form>
+  {% if admin_can_read or uses_llm %}
+  <p class="mt-3 mb-0 small muted">
+    This is a test version.
+    {% if admin_can_read %}The person running it can read what you log, to check how well the app works.{% endif %}
+    {% if uses_llm %}Notes and photos you use to fill in the form are sent to Anthropic's Claude API to be read.{% endif %}
+  </p>
+  {% endif %}
   <p class="mt-3 mb-0 muted">Already have an account? <a href="/login">Log in</a></p>
 </div>
 </body>

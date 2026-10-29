@@ -1,0 +1,25 @@
+# Render Blueprint for the hosted test version (docs/STATUS.md, "Hosted version").
+# The database lives elsewhere (Neon): Render's free web services have no
+# persistent disk, and its free Postgres expires after 30 days.
+services:
+  - type: web
+    name: workout-logger
+    runtime: python
+    plan: free
+    # Editable install so templates, static files, schema.sql and
+    # exercises.json are read from the checkout, exactly as when run locally.
+    buildCommand: pip install -e ".[llm,postgres]"
+    startCommand: uvicorn training.webapp.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    envVars:
+      - key: TRAINING_SECRET_KEY
+        generateValue: true
+      - key: TRAINING_SECURE_COOKIES
+        value: "1"
+      - key: TRAINING_DATABASE_URL
+        sync: false
+      - key: TRAINING_INVITE_CODE
+        sync: false
+      - key: TRAINING_ADMIN_EMAILS
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

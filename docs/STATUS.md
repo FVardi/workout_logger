@@ -306,10 +306,16 @@ that field.
 
 ## Tests
 
-204 tests across six files, all offline (in-memory SQLite, no real log
+223 tests across eight files, all offline (in-memory SQLite, no real log
 needed): `test_advisor.py` (29), `test_math_worked_example.py` (7),
 `test_db.py` (16), `test_session_templates.py` (47),
-`test_user_config.py` (5) and `test_webapp.py` (100).
+`test_user_config.py` (5), `test_webapp.py` (100),
+`test_llm_logging.py` (16: the note → pre-filled form → logged/skipped
+flow, edit detection, privacy of parse runs, the daily cap, photos, invite
+code, admin access, the secret-key check, and the parser schema staying
+within the structured-outputs subset; the model itself is mocked) and
+`test_pg.py` (3; the Postgres round trip runs only with
+`TEST_DATABASE_URL` set, otherwise it's skipped).
 
 In `test_advisor.py`, two were updated for the review pass above rather
 than the EWMA reversal: the dictionary-shape test (now expecting 32
@@ -665,21 +671,85 @@ all of them; `user_config.build_config()` just doesn't offer them as
 friendly settings yet. Add a knob here, not a new code path in
 `advisor.py`, if a future setting needs one.
 
+**Hosted test version (for a few invited testers).** Added 2026-10-29 so
+friends can log through a browser. Everything is switched on by
+environment variables (listed in `app.py`'s docstring); with none set, the
+app behaves exactly as it did locally.
+
+- **Database.** `TRAINING_DATABASE_URL=postgresql://...` puts the log in
+  Postgres instead of `data/webapp.db`, because free hosts have no
+  persistent disk. `db.py` is unchanged in shape: `src/training/pg.py`
+  wraps a pooled psycopg connection so the same sqlite3-style calls work
+  (`?` → `%s`, `RETURNING id` for `lastrowid`, rows readable by name and
+  as tuples; `schema.sql` is translated for identity columns, `DOUBLE
+  PRECISION` and `BYTEA`). The whole existing suite was run against a
+  local Postgres through this adapter; the only failures were the three
+  backfill tests that build a legacy *SQLite* file by hand, which don't
+  apply. `tests/test_pg.py` keeps a round trip that runs whenever
+  `TEST_DATABASE_URL` is set.
+- **Sign-up** requires `TRAINING_INVITE_CODE` when it's set.
+- **Admin.** Accounts in `TRAINING_ADMIN_EMAILS` get `/admin`: users,
+  each user's history (read-only), and the note parser's numbers. The
+  sign-up page says that the admin can read logs, and that notes go to
+  Anthropic's API, whenever either applies.
+- **Cookies.** `TRAINING_SECRET_KEY` is now *required* when
+  `TRAINING_DATABASE_URL` is set (the app refuses to start without it);
+  `TRAINING_SECURE_COOKIES=1` sets `https_only`; the cookie is explicitly
+  `SameSite=Lax`.
+- **Deploy.** `render.yaml` (Render free tier) plus a Postgres URL from
+  Neon's free tier. Render's own free Postgres expires after 30 days, and
+  its free web services sleep after 15 idle minutes, so the first page
+  load after that takes about a minute.
+
+**LLM-assisted logging** (`webapp/parse_entry.py`). A box on `/log` takes
+a free-text note (or a photo of a whiteboard); Claude (Haiku by default,
+`TRAINING_PARSER_MODEL`) turns it into draft pieces in the log form's own
+terms - template, movement rows, amounts, loads, styles - via structured
+outputs. Each draft **pre-fills the ordinary form**, one piece at a time,
+with a banner listing anything to check; the person presses Log it (or
+Skip), so every piece still goes through `/log`'s validation and
+`session_templates`. Decided with the user:
+
+- pre-fill the existing forms rather than a second review UI;
+- the parser *proposes* style, as a pre-select; a proposal the exercise
+  doesn't admit falls back to the form's usual default and is flagged;
+- **unknown exercises are flagged, never mapped to a near match** - the
+  row is left blank, and `/admin` counts every unknown name, which is the
+  evidence for whether the dictionary needs to grow.
+
+Every note is a `parse_runs` row (note, photo, draft, model, tokens,
+latency), and each piece acted on a `parse_outcomes` row (pre-filled form,
+submitted form, `edited`). `/admin` shows the share of pieces logged
+exactly as drafted; `/admin/export.json` is the evaluation set. A per-user
+daily cap (`TRAINING_PARSES_PER_DAY`, default 40) bounds API spend.
+Without `ANTHROPIC_API_KEY` (or with `TRAINING_PARSER=off`) the note box
+simply isn't shown. `scripts/check_parser.py` sends sample notes to the
+real model - **not yet run against the live API** (no key was available
+when it was written); the request shape is covered by a mocked test only.
+
+Open questions it raised, not decided:
+
+- **Calories have no unit.** The form has reps/metres/seconds, so the
+  parser puts "15 cal bike" in as 15 reps and flags it. A `cal` unit would
+  be a schema decision (a `calories` column, or a unit on the set).
+- **Pounds** are converted to kg (rounded to 0.5) and flagged; the log has
+  no load unit.
+
 **Known gaps before this could go anywhere near public**, listed
 honestly rather than silently deferred, since "public web app" is the
-stated eventual target (see this session's framing):
+stated eventual target (see this session's framing). The hosted test
+version above is invite-only, which is what makes these acceptable for
+now:
 
-- **No CSRF protection.** Every mutating route is a plain form POST
-  against a session cookie — textbook CSRF exposure. Needs a token before
-  any public deployment.
-- **No rate limiting** on `/login` or `/signup` — brute-forceable as-is.
-- **No email verification or password reset flow.** Anyone can sign up
-  with any email string; there's no way to prove ownership or recover an
-  account.
-- **The session-cookie secret key defaults to a hardcoded dev string**
-  (`TRAINING_SECRET_KEY`, `app.py`). Must be set to a real secret — and
-  the cookie itself set `https_only` — before this ever runs anywhere
-  but localhost.
+- **No CSRF token.** Mutating routes are plain form POSTs against a
+  session cookie. The cookie is `SameSite=Lax`, which stops modern
+  browsers sending it on cross-site POSTs - the usual CSRF vector - but
+  that's mitigation, not a token.
+- **No rate limiting** on `/login` or `/signup` — brute-forceable as-is
+  (the invite code limits who can sign up, not who can guess passwords).
+- **No email verification or password reset flow.** Anyone with the
+  invite code can sign up with any email string; there's no way to prove
+  ownership or recover an account.
 - **No password strength/breach checking** beyond an 8-to-72-byte range
   (the upper bound is bcrypt's own hard limit, not a design choice — see
   `auth.py`'s `MAX_PASSWORD_BYTES`; enforced explicitly rather than left
@@ -769,7 +839,9 @@ not just a script. Nothing downstream (whether the missing overdue clock
 is ever actually missed, `k`'s value, whether the new rates feel right,
 whether 31 movements feel thin day to day, whether the volume/
 conditioning-focus knobs behave the way they read) can be decided
-credibly before there's real data. The webapp's own gaps (CSRF, rate
-limiting, email verification — see "Webapp" above) are the next thing to
-close only once "public web app" becomes an actual near-term plan, not
-before.
+credibly before there's real data. The hosted
+test version (see "Webapp") exists so a few friends can log too; their
+notes are also the parser's first real evaluation data. The webapp's
+remaining gaps (CSRF token, rate limiting, email verification) are the
+next thing to close only once "public web app" becomes an actual
+near-term plan, not before.

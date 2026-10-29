@@ -31,6 +31,7 @@
         <li class="nav-item"><a class="nav-link{% if active_nav == 'coverage' %} active{% endif %}" href="/coverage">Coverage</a></li>
         <li class="nav-item"><a class="nav-link{% if active_nav == 'history' %} active{% endif %}" href="/history">History</a></li>
         <li class="nav-item"><a class="nav-link{% if active_nav == 'settings' %} active{% endif %}" href="/settings">Settings</a></li>
+        {% if request.session.get("is_admin") %}<li class="nav-item"><a class="nav-link{% if active_nav == 'admin' %} active{% endif %}" href="/admin">Admin</a></li>{% endif %}
       </ul>
       <form method="post" action="/logout" class="d-flex">
         <button type="submit" class="btn btn-sm btn-outline-secondary">Log out</button>

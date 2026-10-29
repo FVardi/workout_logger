@@ -6,6 +6,52 @@
 
 {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
+{#- LLM-assisted logging (webapp/parse_entry.py): a note or photo becomes
+    draft pieces, each pre-filling the form below for checking. -#}
+{% if parse_ctx %}
+<div class="alert alert-info parse-banner">
+  <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2">
+    <strong>From your note &mdash; piece {{ parse_ctx.piece_index + 1 }} of {{ parse_ctx.piece_count }}.</strong>
+    <form method="post" action="/log/parse/skip" class="m-0">
+      <input type="hidden" name="parse_run_id" value="{{ parse_ctx.run_id }}">
+      <input type="hidden" name="piece_index" value="{{ parse_ctx.piece_index }}">
+      <input type="hidden" name="prefill_json" value='{{ parse_ctx.prefill.fields|tojson }}'>
+      <button class="btn btn-sm btn-outline-secondary" type="submit">Skip this piece</button>
+    </form>
+  </div>
+  <p class="mb-1">Check the form below and press <em>Log it</em>. Nothing is saved until you do.</p>
+  {% set unknown = parse_ctx.prefill.unknown %}
+  {% if unknown or parse_ctx.prefill.notes or parse_ctx.uncertain %}
+  <ul class="mb-1">
+    {% for where, name in unknown.items() %}
+    <li><strong>&ldquo;{{ name }}&rdquo;</strong> isn't in the exercise list. Pick a movement for that row, or leave it blank to drop it.</li>
+    {% endfor %}
+    {% for note in parse_ctx.prefill.notes %}<li>{{ note }}</li>{% endfor %}
+    {% for note in parse_ctx.uncertain %}<li>{{ note }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if parse_ctx.raw_text %}
+  <details><summary class="small">Your note</summary><pre class="note-text mb-0">{{ parse_ctx.raw_text }}</pre></details>
+  {% endif %}
+</div>
+{% elif parse_enabled %}
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="post" action="/log/parse" enctype="multipart/form-data">
+      <label class="form-label" for="note">Describe it, and the form gets filled in for you</label>
+      <textarea class="form-control mb-2" id="note" name="text" rows="3"
+                placeholder="back squat 5x5 @ 100, then 3 rounds: 400 m run, 21 KBS 24 kg, 12 pull-ups &mdash; 14:20">{{ note_text or "" }}</textarea>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <input class="form-control form-control-sm" style="max-width: 18rem" type="file" name="image"
+               accept="image/jpeg,image/png,image/webp,image/gif">
+        <button class="btn btn-primary" type="submit">Read it</button>
+        <span class="form-text m-0">A photo of the whiteboard works too. To dictate, use your phone keyboard's microphone.</span>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 {% if today_pieces %}
 <table class="table table-sm align-middle mb-2">
   <thead>
@@ -64,6 +110,16 @@
     JS - you'd just see options the server would reject, same as before. -#}
 {% macro style_options() %}
   {% for s in styles %}<option value="{{ s }}">{{ style_labels.get(s, s) }}</option>{% endfor %}
+{% endmacro %}
+
+{#- Carries the draft piece being checked, if any, through whichever form
+    gets submitted - every form has it, since the person may switch type. -#}
+{% macro parse_fields() %}
+{% if parse_ctx %}
+  <input type="hidden" name="parse_run_id" value="{{ parse_ctx.run_id }}">
+  <input type="hidden" name="piece_index" value="{{ parse_ctx.piece_index }}">
+  <input type="hidden" name="prefill_json" value='{{ parse_ctx.prefill.fields|tojson }}'>
+{% endif %}
 {% endmacro %}
 
 {#- Each workout type is its own <form>, so the date has to appear in each
@@ -125,6 +181,7 @@
 <div class="template-form" data-template="strength" {% if active != "strength" %}hidden{% endif %}>
 <form method="post" action="/log">
   <input type="hidden" name="template" value="strength">
+  {{ parse_fields() }}
   {{ date_field() }}
   <div class="row g-3 mb-3">
     <div class="col-md-5">
@@ -165,6 +222,7 @@
 <div class="template-form" data-template="rounds" {% if active != "rounds" %}hidden{% endif %}>
 <form method="post" action="/log">
   <input type="hidden" name="template" value="rounds">
+  {{ parse_fields() }}
   {{ date_field() }}
   <div class="row g-3 mb-3" style="max-width: 26rem;">
     <div class="col-6">
@@ -184,6 +242,7 @@
 <div class="template-form" data-template="ladder" {% if active != "ladder" %}hidden{% endif %}>
 <form method="post" action="/log">
   <input type="hidden" name="template" value="ladder">
+  {{ parse_fields() }}
   {{ date_field() }}
   <div class="row g-3 mb-3" style="max-width: 40rem;">
     <div class="col-md-4">
@@ -218,6 +277,7 @@
 <div class="template-form" data-template="emom" {% if active != "emom" %}hidden{% endif %}>
 <form method="post" action="/log">
   <input type="hidden" name="template" value="emom">
+  {{ parse_fields() }}
   {{ date_field() }}
   <div class="row g-3 mb-3" style="max-width: 26rem;">
     <div class="col-6">
@@ -244,6 +304,7 @@
 <div class="template-form" data-template="amrap" {% if active != "amrap" %}hidden{% endif %}>
 <form method="post" action="/log">
   <input type="hidden" name="template" value="amrap">
+  {{ parse_fields() }}
   {{ date_field() }}
   <div class="row g-3 mb-3" style="max-width: 34rem;">
     <div class="col-4">
@@ -359,6 +420,43 @@
       refreshStyle(el.closest("tr") || el.closest("form"));
     }
   });
+
+  // Pre-fill from a draft piece (parse_entry.py). Runs before refreshAll so
+  // the exercise selects are set when styles are derived; the draft's own
+  // style proposal is then applied on top and marked as chosen, so the
+  // load-based guess doesn't overwrite it.
+  var PREFILL = {{ (parse_ctx.prefill if parse_ctx else None)|tojson }};
+  function applyPrefill() {
+    if (!PREFILL) { return; }
+    var wrap = document.querySelector('.template-form[data-template="' + PREFILL.template + '"]');
+    if (!wrap) { return; }
+    var form = wrap.querySelector("form");
+    var styles = {};
+    Object.keys(PREFILL.fields).forEach(function (name) {
+      if (name === "template") { return; }
+      var value = PREFILL.fields[name];
+      if (/(^|_)style$/.test(name)) { styles[name] = value; return; }
+      var el = form.querySelector('[name="' + name + '"]');
+      if (el) { el.value = value; }
+    });
+    // Style selects only hold the admissible options once refreshStyle has
+    // run for that exercise, so set them afterwards.
+    Object.keys(styles).forEach(function (name) {
+      var el = form.querySelector('[name="' + name + '"]');
+      if (!el || !styles[name]) { return; }
+      refreshStyle(el.closest("tr") || form);
+      el.value = styles[name];
+      el.dataset.touched = "1";
+    });
+    Object.keys(PREFILL.unknown).forEach(function (prefix) {
+      var select = prefix === "main" ? form.querySelector('[name="exercise_id"]')
+                                     : form.querySelector('[name="' + prefix + '_exercise_id"]');
+      if (!select) { return; }
+      select.classList.add("is-invalid");
+      select.title = "\u201c" + PREFILL.unknown[prefix] + "\u201d isn't in the exercise list";
+    });
+  }
+  applyPrefill();
 
   function refreshAll() {
     document.querySelectorAll(".template-form form").forEach(function (form) {

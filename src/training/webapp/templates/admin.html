@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+
+<h1>Admin</h1>
+
+<h2 class="h5 mt-4">Note parser</h2>
+<p class="muted">
+  {% if parser == "anthropic" %}On (Claude API).{% elif parser == "fake" %}Running the fake parser (no API key).{% else %}Off &mdash; set <code>ANTHROPIC_API_KEY</code> to turn it on.{% endif %}
+  A piece counts as <em>unedited</em> when the form was submitted exactly as pre-filled.
+</p>
+<table class="table table-sm" style="max-width: 36rem">
+  <tbody>
+    <tr><td>Notes read</td><td>{{ stats.runs }}{% if stats.errors %} <span class="text-danger">({{ stats.errors }} failed)</span>{% endif %}</td></tr>
+    <tr><td>Pieces drafted</td><td>{{ stats.pieces }}</td></tr>
+    <tr><td>Logged</td><td>{{ stats.logged }}{% if stats.logged %} &mdash; {{ stats.unedited }} unedited ({{ (100 * stats.unedited / stats.logged)|round|int }}%){% endif %}</td></tr>
+    <tr><td>Skipped</td><td>{{ stats.skipped }}</td></tr>
+    <tr><td>Median time to read</td><td>{% if stats.median_latency_s %}{{ "%.1f"|format(stats.median_latency_s) }} s{% else %}&ndash;{% endif %}</td></tr>
+    <tr><td>Tokens in / out</td><td>{{ "{:,}".format(stats.tokens_in) }} / {{ "{:,}".format(stats.tokens_out) }}</td></tr>
+  </tbody>
+</table>
+{% if stats.unknown %}
+<p class="mb-1"><strong>Movements not in the dictionary</strong> (as written, times mentioned):</p>
+<p class="muted">{% for name, n in stats.unknown %}{{ name }} ({{ n }}){% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+{% endif %}
+<p><a href="/admin/export.json">Download every parse as JSON</a> <span class="muted">&mdash; note, draft, and what was logged or skipped.</span></p>
+
+<h2 class="h5 mt-4">Users</h2>
+<table class="table table-sm">
+  <thead><tr><th>Email</th><th>Joined</th><th>Training days</th><th>Notes read</th></tr></thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td><a href="/admin/users/{{ u.id }}">{{ u.email }}</a></td>
+      <td class="muted">{{ u.created_at[:10] }}</td>
+      <td>{{ u.sessions }}</td>
+      <td>{{ u.parses }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2 class="h5 mt-4">Recent notes</h2>
+<table class="table table-sm">
+  <thead><tr><th>When (UTC)</th><th>Who</th><th>Note</th><th>Outcome</th></tr></thead>
+  <tbody>
+    {% for r in runs %}
+    <tr>
+      <td><a href="/admin/parse/{{ r.id }}">{{ r.created_at[:16]|replace("T", " ") }}</a></td>
+      <td class="muted">{{ emails.get(r.user_id, "?") }}</td>
+      <td>{% if r.input_kind == "photo" %}[photo] {% endif %}{{ r.raw_text[:90] }}</td>
+      <td>
+        {% if r.error %}<span class="text-danger">failed</span>
+        {% elif not r.outcomes %}<span class="muted">not acted on</span>
+        {% else %}
+          {% for o in r.outcomes %}
+            {% if o.action == "skipped" %}<span class="muted">skipped</span>{% elif o.edited %}<span class="text-warning">edited</span>{% else %}<span class="text-success">as drafted</span>{% endif %}{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No notes yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Note #{{ run.id }}{% endblock %}
+{% block content %}
+
+<p><a href="/admin">&larr; Admin</a></p>
+<h1>Note #{{ run.id }}</h1>
+<p class="muted">
+  {{ owner }} &middot; {{ run.created_at[:16]|replace("T", " ") }} UTC &middot; {{ run.model }}, prompt v{{ run.prompt_version }}
+  {% if run.latency_ms %}&middot; {{ "%.1f"|format(run.latency_ms / 1000) }} s{% endif %}
+  {% if run.input_tokens %}&middot; {{ run.input_tokens }} in / {{ run.output_tokens }} out tokens{% endif %}
+</p>
+{% if run.error %}<div class="alert alert-danger">{{ run.error }}</div>{% endif %}
+
+<h2 class="h5">Input</h2>
+{% if run.raw_text %}<pre class="admin-json">{{ run.raw_text }}</pre>{% endif %}
+{% if run.image_type %}<p><img class="admin-photo" src="/admin/parse/{{ run.id }}/image" alt="Photo sent with the note"></p>{% endif %}
+
+<h2 class="h5">What happened to each piece</h2>
+{% for o in outcomes %}
+<p class="mb-1"><strong>Piece {{ o.piece_index + 1 }}:</strong>
+  {% if o.action == "skipped" %}skipped{% elif o.edited %}logged after edits{% else %}logged as drafted{% endif %}</p>
+{% if o.changes %}
+<table class="table table-sm" style="max-width: 40rem">
+  <thead><tr><th>Field</th><th>Drafted</th><th>Logged</th></tr></thead>
+  <tbody>
+    {% for key, before, after in o.changes %}
+    <tr><td><code>{{ key }}</code></td><td>{{ before }}</td><td>{{ after }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% else %}
+<p class="muted">Nothing logged or skipped from this note yet.</p>
+{% endfor %}
+
+<h2 class="h5">Draft as returned</h2>
+<pre class="admin-json">{{ draft or "—" }}</pre>
+
+{% endblock %}
