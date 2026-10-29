@@ -295,13 +295,14 @@ explicit and unconditional (a severely neglected same-pattern cell could
 previously still outbid the penalty and repeat anyway; now it categorically
 cannot), rather than changing what mostly happened already.
 
-**One correctness caveat, not yet fixed.** `score = 0` at target is exact
+**On-target training sawtooths around 0.** `score = 0` at target is exact
 only in the continuous-time limit. Real exposures are discrete events; for
-a perfectly periodic log at exactly the target rate, the true discrete
-steady state is `1/(1 − e^(−1/k))`, not `k` — at `k = 2` that's about 27%
-too high, so training exactly on target forever actually reads as
-slightly *ahead* (`score` a little below 0), not exactly on the mark. The
-gap shrinks as `k` grows. See `docs/AUDIT.md`.
+a perfectly periodic log at exactly the target rate, the EWMA just after
+each exposure is `1/(1 − e^(−1/k))`, about 27% above `k` at `k = 2`. That
+is the peak, not a bias: the score rises linearly from about −0.24 just
+after a session to +0.26 just before the next is due, and averages +0.01.
+The swing has width `1/k`. See `docs/math.tex`, "Training exactly on
+target", for the derivation.
 
 ## No hard override
 
@@ -387,14 +388,11 @@ should say so.
   all workout picks — see Scoring's note on why it was dropped rather than
   re-tuned. Advisory only: this constrains what `advise()` will *suggest*,
   not what you're free to actually train.
-- **Rep schemes** are ranked **per pattern** by staleness, so heavy cleans
-  avoid schemes recently used by heavy deadlifts. Global ranking was
-  wrong; every lift got offered the same scheme.
-- **Rep counts** come from a rolling **median** per cell — learned from
-  the log, not prescribed. Median because rep counts are skewed. Schemes
-  cannot be averaged, which is why they're categorical.
-- Rep schemes apply to `heavy` only. "Back squat 4×8" inside a
-  high-heart-rate piece is nonsense; `hhr` gets a rep target.
+- **No rep schemes or rep counts.** The advisor suggests *what* to train,
+  never how many reps or which scheme. Two helpers that did
+  (`suggest_rep_scheme()`, `suggest_rep_count()`) were removed on
+  2026-10-29: no page used them, and the logging rework stops recording
+  the rep-scheme field they learned from.
 
 ## Output
 
@@ -434,11 +432,10 @@ clock *exemption*, a different, now-removed mechanism); it was reverse-
 engineered to fit a capacity budget. Dropped once the reasoning behind it
 didn't hold up under questioning — see `docs/AUDIT.md`.
 
-**Judgment — authored, ~55 numbers now instead of ~200.** `E`, admissible
-styles, laterality, implement, for 19 exercises (revised in review from
-the pruned-to-16 set: `power_clean` dropped, `bench_press`/`front_squat`/
-`double_unders`/`biking` added; `kipping_pull_up` was added then removed
-again in the same pass — see `docs/STATUS.md`). Set once,
+**Judgment — authored.** `E`, admissible styles, laterality, implement,
+for 31 exercises (pruned to 16, revised to 19 in review, grown to 29 on
+contact with real logging, then 31 with two light pulls — see
+`docs/STATUS.md`). Set once,
 version, hold fixed. Not fittable at n=1. `R` is retired, not shrunk —
 see "The authored matrix."
 
@@ -461,7 +458,10 @@ pushed it to 12.31/week against a supply of ~12 (slack gone, slightly
 negative — see git history for that period's numbers). **After the
 subsequent review pass (revised rates, dropped `brace` discount, six
 cells removed from the admissible set), demand is 10.0/week against that
-same ~12 supply — about 17% slack, restored.**
+same ~12 supply — about 17% slack, restored.** Adding the `pull`/`light`
+cell deliberately (ring rows and kipping pull-ups, 2026-10-29) raised it
+to **11.0/week, about 8% slack** — see `docs/STATUS.md`'s "Light-pull
+pass".
 
 Two changes moved it in opposite directions and the second dominated.
 Raising `TARGET_RATE` and dropping `PATTERN_WEIGHT["brace"]` to `1.0` both
@@ -470,13 +470,14 @@ removed six cells entirely (`pull × light`, `brace × light`,
 `flexion × heavy`, `flexion × hhr`, `engine × heavy`, `engine × hhr` —
 each pattern restricted to the styles it actually has an exercise for; see
 "Axes" and `docs/STATUS.md`), which shrank the *count* of cells
-paying into the total. Fifteen admissible cells now, not nineteen. The
-count effect outweighed the per-cell rate increase.
+paying into the total. Fifteen admissible cells after that pass, not
+nineteen (sixteen now, with `pull × light` back on purpose). The count
+effect outweighed the per-cell rate increase.
 
 The synthetic simulation reflects the restored slack directly: the
 worst end-of-run gap dropped from 26 days (`brace/heavy`, under the old
-12.31/week regime) to 12 days, and every cell's final score sits within
-about ±0.9 of on-target — see `docs/STATUS.md`'s Simulation
+12.31/week regime) to 12 days, and is 9 days in the current 16-cell run;
+every cell's final score sits within about ±0.9 of on-target — see `docs/STATUS.md`'s Simulation
 section for the current numbers.
 
 Three ways out, none taken: lower `PATTERN_WEIGHT["engine"]` from 1.0;

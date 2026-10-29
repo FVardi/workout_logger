@@ -41,7 +41,7 @@ SIMULATION_DAYS = 60
 SEED = 20260101
 
 REP_RANGE_WORKOUT = (6, 15)
-REP_RANGE_HEAVY_FALLBACK = (3, 8)  # used only until suggest_rep_count() has history
+HEAVY_SETS, HEAVY_REPS = 5, 5  # a plain 5x5; scoring never reads reps or sets
 
 
 @dataclass
@@ -82,11 +82,8 @@ def _commit_pick(conn, session_id, dictionary, sets_so_far, day, pick, rng) -> N
     ex = pick.exercise
     block_id = db.log_block(conn, session_id, pick.style)
     if pick.style == "heavy":
-        scheme = advisor.suggest_rep_scheme(dictionary, sets_so_far, day, pick.pattern)
-        reps = advisor.suggest_rep_count(sets_so_far, ex.id, "heavy") or rng.randint(*REP_RANGE_HEAVY_FALLBACK)
-        n_sets = 5 if "5" in scheme else 3
-        for _ in range(n_sets):
-            _log_one_or_two_sides(conn, block_id, ex, dictionary.version, reps, scheme, rng)
+        for _ in range(HEAVY_SETS):
+            _log_one_or_two_sides(conn, block_id, ex, dictionary.version, HEAVY_REPS, "5x5", rng)
     else:
         reps = rng.randint(*REP_RANGE_WORKOUT)
         n_sets = rng.randint(1, 3)

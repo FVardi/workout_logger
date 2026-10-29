@@ -391,6 +391,30 @@
       }
     },
     {
+      "id": "ring_row",
+      "name": "Ring row",
+      "implement": "rings",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "pull": 1.0
+      }
+    },
+    {
+      "id": "kipping_pull_up",
+      "name": "Kipping pull-up",
+      "implement": "bodyweight",
+      "laterality": "bilateral",
+      "admissible_styles": [
+        "light"
+      ],
+      "E": {
+        "pull": 1.0
+      }
+    },
+    {
       "id": "rest",
       "name": "Rest",
       "implement": "none",

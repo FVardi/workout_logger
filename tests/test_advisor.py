@@ -64,10 +64,12 @@ def test_periodic_steady_state_is_not_exactly_memory_k():
     MEMORY_K). Real exposures are discrete events. For a perfectly periodic
     log at exactly the target rate, the true discrete steady state is
     1/(1 - exp(-1/MEMORY_K)), which only approaches MEMORY_K as MEMORY_K
-    grows - at MEMORY_K=2 it's about 27% too high, so training exactly on
-    target forever reads as slightly *ahead* (score < 0), not exactly 0.
-    This test pins that gap down numerically so it can't silently drift;
-    it is not evidence of a bug.
+    grows - at MEMORY_K=2 it's about 27% above MEMORY_K. That is the value
+    just *after* an exposure, so the score reads ahead (< 0) right after a
+    session; it then rises to +0.26 before the next is due and averages
+    +0.01 (docs/math.tex, "Training exactly on target", pinned in
+    test_math_worked_example.py). This test pins the post-exposure value
+    so it can't silently drift; it is not evidence of a bug.
     """
     k = advisor.MEMORY_K
     discrete_steady_state = 1.0 / (1.0 - math.exp(-1.0 / k))
@@ -186,6 +188,17 @@ def test_every_admissible_cell_has_an_eligible_exercise(dictionary):
     assert empty == []
 
 
+def test_pull_light_is_served_by_the_light_pulls_only(dictionary):
+    """pull/light exists on purpose, via ring rows and kipping pull-ups -
+    not as a side effect of a long E row (which is why man_maker is
+    hhr-only). If another exercise starts serving it, that should be a
+    deliberate change to this test too."""
+    assert ("pull", "light") in advisor.admissible_cells(dictionary)
+    served_by = {e.id for e in advisor.eligible_exercises(dictionary, "pull", "light")}
+    assert served_by == {"ring_row", "kipping_pull_up"}
+    assert len(advisor.admissible_cells(dictionary)) == 16
+
+
 def test_every_pattern_and_style_appears_in_some_admissible_cell(dictionary):
     cells = advisor.admissible_cells(dictionary)
     assert {p for p, _s in cells} == set(dictionary.patterns)
@@ -285,12 +298,13 @@ def test_unilateral_exposures_are_no_longer_tracked_in_log_stats(dictionary, con
 
 def test_dictionary_v10_is_the_pruned_minimal_set(dictionary):
     assert dictionary.version == 10
-    # 29 real movements plus `rest`, which carries an empty E so it's never
+    # 31 real movements plus `rest`, which carries an empty E so it's never
     # suggested and contributes no exposure - see test below. Was 19+rest
     # after the v10 prune; ten dumbbell/kettlebell/gymnastics movements were
-    # added later, when logging real sessions surfaced the gap. That is the
+    # added later, when logging real sessions surfaced the gap, then two
+    # light pulls to create the pull/light cell deliberately. That is the
     # intended growth path - add on contact with reality, not speculatively.
-    assert len(dictionary.exercises) == 30
+    assert len(dictionary.exercises) == 32
     assert set(dictionary.patterns) == {
         "hinge", "push", "squat", "pull", "flexion", "brace", "engine",
     }

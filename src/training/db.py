@@ -196,8 +196,7 @@ def last_style_for_exercise(conn: sqlite3.Connection, user_id: int, exercise_id:
     admitting both heavy and hhr, "same as last time" is a better default
     than any fixed guess, and it can't be inferred from load (the model
     never sees a 1RM - see docs/GUIDE.md's "Deliberately absent").
-    Same principle as suggest_rep_count(): learned from the log, not
-    prescribed.
+    Learned from the log, not prescribed.
     """
     row = conn.execute(
         """SELECT blocks.style AS style

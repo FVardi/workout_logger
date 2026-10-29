@@ -10,18 +10,20 @@ parameter-review items: `docs/AUDIT.md`.
 Following GUIDE.md's build order, all four steps have a first draft:
 
 1. **Exercise dictionary** — `src/training/exercises.json`, version 10, 30
-   entries (29 movements plus `rest`) with authored `E` weights,
+   entries (31 movements plus `rest`) with authored `E` weights,
    admissible styles, laterality, implement. Seven patterns —
    `squat`/`hinge`/`push`/`pull`/`flexion`/`brace`/`engine`. Pruned from
    63 exercises to 16 in this version, revised to 19 in a later review
-   pass, then grown to 29 once real logging surfaced missing movements —
-   see the reversal below, "Review pass", and "Growth pass" further down.
+   pass, then grown to 29 once real logging surfaced missing movements,
+   then to 31 with two light pulls — see the reversal below, "Review
+   pass", "Growth pass" and "Light-pull pass" further down.
 2. **SQLite log** — `src/training/schema.sql` + `src/training/db.py`,
    `session -> block -> set` per GUIDE.md's data model. Unchanged by
    anything below: the schema still logs raw sets, and none of the
    scoring reversal required a migration.
-3. **`advisor.py`** — all four query surfaces implemented: `advise()`,
-   `recommend()`, `suggest_rep_scheme()`, `suggest_rep_count()`. Scoring
+3. **`advisor.py`** — two query surfaces: `advise()` and `recommend()`
+   (`suggest_rep_scheme()`/`suggest_rep_count()` were removed 2026-10-29,
+   unused by the app — see GUIDE.md's Rules). Scoring
    is a single log-EWMA per cell; there is no hard override of any kind —
    see below.
 4. **Logging** — **started**, via a webapp rather than a script — see
@@ -247,10 +249,9 @@ exercise with a long `E` row silently creates cells. As `light`, man maker
 would have been the sole server of `pull`/`light` (weight 0.3) and
 `brace`/`light` (weight 0.1) — both would read chronically behind forever,
 because nothing else in the dictionary can service them. There is
-deliberately **still no `pull`/`light` cell**. If one is wanted it should
-be introduced on purpose, by adding a light pull (ring row, kipping
-pull-up), not as a by-product of one dumbbell movement. Cell count is
-unchanged at 15.
+deliberately no `pull`/`light` cell at the end of this pass; one was
+added on purpose later — see "Light-pull pass" below. Cell count was
+unchanged at 15 by this pass.
 
 **The `hhr`-requires-`heavy` rule now has three exceptions**, not one:
 `kb_swing`, `devils_press`, `man_maker`. The rule was written against
@@ -273,7 +274,35 @@ sandbox; the full suite (196 tests) has since been run and passes,
 including the 30-entry count in
 `test_dictionary_v10_is_the_pruned_minimal_set`, the ladder
 `rounds` + `interval_seconds` tests, and the three-column Today page
-tests. `tracker.bat` itself is still unrun (Windows-only).
+tests. `tracker.bat` also ran on Windows the same day: starts the
+server and opens the browser.
+
+## Light-pull pass (still v10): `ring_row` and `kipping_pull_up`, 29 -> 31
+
+Added 2026-10-29 at the user's request, to create the `pull`/`light` cell
+deliberately rather than as a by-product (the reason `man_maker` is
+`hhr`-only). Both are `light`-only, bilateral, `E = {pull: 1.0}`.
+`ring_row` introduces a new `implement` value, `rings`; nothing validates
+that field.
+
+- **Cells: 15 -> 16.** `pull`/`light` is served only by these two;
+  `test_pull_light_is_served_by_the_light_pulls_only` pins both the cell
+  count and the serving set, so a third server has to be a deliberate
+  change.
+- **Demand: 10.0 -> 11.0/week** against the same ~12 supply (one more
+  light cell at `TARGET_RATE["light"] = 1.0`). Slack drops from ~17% to
+  ~8%.
+- **`kipping_pull_up` is back.** It was added and removed in the review
+  pass over the objection that the kip does part of the work, so full
+  `pull` credit overstates it. That objection was about crediting a kip
+  like a strict pull-up; as a light-only exercise it never competes with
+  `strict_pull_up` for the heavy or `hhr` cells, so it's re-added at full
+  `pull` weight. The rest of the kipping family (`chest_to_bar_pull_up`,
+  `bar_muscle_up`, `ring_muscle_up`) is still absent.
+- **Simulation**, regenerated: all 31 exercises used, every cell ahead of
+  target (scores −0.76 to −0.04), longest end-of-run gap 9 days
+  (`brace`/`heavy`). Ring rows and kipping pull-ups were picked 6 times
+  each over the 26 simulated sessions.
 
 ## Tests
 
@@ -310,12 +339,13 @@ self-consistency check, not real data; 3 sessions/week, one heavy piece
 then four workout pieces), only its report format changed to show EWMA
 scores instead of deficits. Run `python -m training.simulate`.
 
-Current report, against dictionary v10 post-review-pass: **all 19
-exercises used**, and every cell's final score sits within roughly
-−0.86 to −0.14 of on-target — tighter and entirely on the "ahead" side,
-compared to the pre-review-pass run (−0.6 to +0.02, with some cells
-already reading behind). Consistent with the restored capacity slack
-(10.0/week demand against ~12 supply, vs. 12.31/week before).
+Current report, regenerated after the light-pull pass (31 exercises, 16
+cells): **all 31 exercises used**, and every cell's final score sits
+within roughly −0.76 to −0.04 of on-target, entirely on the "ahead" side.
+Demand is 11.0/week against ~12 supply. (The post-review-pass run, at 19
+exercises and 10.0/week, read −0.86 to −0.14; the pre-review-pass run read
+−0.6 to +0.02, with some cells already behind.) The report's period is
+the 60 days before the run date, so regenerating it moves the dates.
 
 **"Longest gaps at end of simulation"**: days since each admissible cell
 was literally last trained, sorted worst first — the direct check for
@@ -328,11 +358,8 @@ no-clock mechanism itself. Re-check this table every time the simulation
 changes; nothing is structurally preventing a much larger gap the way the
 old clock used to.
 
-The full math write-up (`docs/math.tex`) is **not** yet updated
-for this reversal — its Scoring and Overdue sections, and its worked
-example, are all built on the retired deficit/window/clock machinery.
-Flagged clearly inline with an auditbox rather than silently left to go
-stale; full rewrite is a separate, tracked pass. See "Known open items."
+The math write-up (`docs/math.tex`) was rewritten against the live model
+on 2026-10-29 — see "Known open items".
 
 ## Webapp
 
@@ -545,8 +572,7 @@ is submitted, and the control stays editable.
    but not wired into the form until now — an earlier version of this
    section claimed it worked when it didn't.)
 2. **The default is the style that exercise was last logged at** — learned
-   from the log rather than prescribed, the same principle as
-   `suggest_rep_count()`.
+   from the log rather than prescribed.
 3. **A load at or above `HEAVY_LOAD_FRACTION` (0.8) of your own heaviest
    ever logged for that lift pre-selects `heavy` instead**, via
    `db.heaviest_load_for_exercise()`. That's a stand-in for a 1RM used
@@ -676,16 +702,22 @@ the same-session repeat rule, which *is* now a hard override, just a
 within-session-variety one rather than a cross-session-urgency one — see
 "Review pass" above.)
 
-**`math.tex` needs a full rewrite**, not a patch — see Simulation above.
-Now further out of date than before: it predates both the dictionary
-prune and this review pass.
+**`math.tex` rewritten 2026-10-29** as a specification of the current
+`advisor.py` (31 movements, 16 cells), with no content about the retired
+model. Its worked example is recomputed by
+`tests/test_math_worked_example.py`, so it can't drift silently. Its
+"Open" boxes add four items not tracked elsewhere: squat/light and
+flexion/light are each served by a single movement; the start-up
+transient (every EWMA starts at zero, so scores read behind for about `τ`
+days: two weeks for light, eight for hhr); the undocumented "~12" supply
+figure (15 pieces a week by direct count, and heavy demand of 3.75 a week
+is met only with help from the hhr credit); and the `recommend()`
+thresholds being free choices.
 
-**The kipping family is deferred again**, having briefly not been:
-`kipping_pull_up` was added back in the review pass and removed again in
-the same session — see "Review pass" above. `chest_to_bar_pull_up`,
-`bar_muscle_up`, `ring_muscle_up` remain absent; `strict_pull_up` is the
-only pull-up variant in play. Revisit as a group if/when any pull-up
-variant gets added back.
+**The rest of the kipping family is still absent.** `kipping_pull_up` is
+back as a light-only exercise (see "Light-pull pass");
+`chest_to_bar_pull_up`, `bar_muscle_up`, `ring_muscle_up` are not in the
+dictionary. Add them on contact with real logging, like everything else.
 
 **Nothing in the model has been checked against a real log.** This is
 still the actual bottleneck — see "Next step."

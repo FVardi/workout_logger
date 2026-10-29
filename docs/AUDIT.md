@@ -58,17 +58,15 @@ Preserved in git history, not reproduced here.
   point without deriving it. **One concrete consequence worth knowing
   before treating it as harmless:** the score's "0 = exactly on target"
   claim is only exact in the continuous-time limit. Real exposures are
-  discrete events; the true discrete-event steady state at exactly the
-  target rate is `1/(1 - e^(-1/k))`, not `k` — at `k=2` that's about 27%
-  higher than `k`, so training precisely on target forever would actually
-  read as slightly *ahead* (score a little below 0), not dead-on.
-  `test_periodic_steady_state_is_not_exactly_memory_k` pins the exact gap
-  down numerically. The gap shrinks as `k` grows — raising `k` (longer
-  memory, slower-reacting scores) is the direct fix if the bias ever
-  matters in practice; not urgent enough to have done pre-emptively.
-  Explicitly reviewed and kept at `2.0` in this pass — the bias doesn't
-  change what gets recommended, only how far below 0 an on-target score
-  reads.
+  discrete events; just after each exposure at exactly the target rate
+  the EWMA is `1/(1 - e^(-1/k))`, about 27% above `k` at `k=2`.
+  **Corrected 2026-10-29:** this was described as on-target training
+  reading slightly *ahead*. That's only the post-exposure peak. The score
+  sawtooths from about −0.24 just after a session to +0.26 just before
+  the next is due and averages +0.01, so there is no bias on average; the
+  swing has width `1/k`. Derivation in `docs/math.tex`, "Training exactly
+  on target"; both values pinned by tests. Raising `k` narrows the swing
+  at the price of slower-reacting scores. Kept at `2.0`.
 
 ## Tuned-class (near-noise, by two independent ablations) — now empty
 
@@ -94,8 +92,8 @@ penalty had: a severely neglected same-pattern cell's score could in
 principle still grow past `1.1` and repeat anyway, and now categorically
 cannot. See `docs/GUIDE.md`'s "Rules".
 
-- **`REP_SCHEMES` list** — unchanged, still a generic invented list
-  (`5x5`, `5-3-1`, etc.). Swap in whatever you actually program.
+- **`REP_SCHEMES` list** — gone, with `suggest_rep_scheme()` and
+  `suggest_rep_count()` (2026-10-29). Nothing in the app used them.
 
 ## What's gone, and why it's not merely renamed
 
@@ -174,8 +172,10 @@ same reversal (see `docs/STATUS.md` for the full narrative):
   unresolved. Net effect: unchanged from before the review —
   `strict_pull_up` is still the dictionary's only pull-up variant.
   `chest_to_bar_pull_up`, `bar_muscle_up`, and `ring_muscle_up` remain
-  absent. Revisit as a group if a second pull-up variant is ever added,
-  same as before.
+  absent. **Superseded 2026-10-29:** `kipping_pull_up` was re-added as a
+  light-only exercise, alongside `ring_row`, to create the `pull`/`light`
+  cell — see `docs/STATUS.md`'s "Light-pull pass" for why the objection
+  above doesn't apply at light.
 
 ## What an empty `E` row actually does — worth knowing before editing one
 
@@ -196,7 +196,9 @@ give it an empty `E` deliberately, not by omission.
 
 ## Dictionary review status
 
-19 exercises now, not 16 — revised in the same review pass as the
+31 exercises now. This section describes the review pass, which took the
+dictionary from 16 to 19; the growth pass (19 -> 29) and the light-pull
+pass (29 -> 31) are in `docs/STATUS.md`. 19 exercises after that pass, not 16 — revised in the same review pass as the
 constants above. Changes from the pruned-to-16 set: `power_clean` was
 dropped entirely (its only credit, `hinge`, is still covered by `deadlift`
 and `kb_swing`); `bench_press`, `front_squat`, `double_unders`, and

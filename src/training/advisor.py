@@ -75,12 +75,13 @@ HHR_CREDIT = 0.5  # toward the heavy cell's EWMA; lower only if priority shifts 
 # See docs/AUDIT.md: the *continuous*-time steady state is exactly
 # MEMORY_K, but real exposures are discrete events, and the discrete steady
 # state is 1/(1 - exp(-1/MEMORY_K)), which is only close to MEMORY_K once
-# MEMORY_K is reasonably large. At MEMORY_K=2 the discrete steady state is
-# about 1.27x too high, i.e. training exactly on target forever would read
-# as slightly "ahead" rather than exactly 0 - real, not blocking, flagged.
+# MEMORY_K is reasonably large. At MEMORY_K=2 that post-exposure value is
+# about 1.27x MEMORY_K, but it is the peak, not the typical value: for
+# training exactly on target the score sawtooths between about -0.24 just
+# after a session and +0.26 just before the next is due, and averages
+# +0.01. See docs/math.tex, "Training exactly on target".
 MEMORY_K = 2.0
 
-REP_SCHEMES = ["5x5", "3x3x3x3x3", "5-3-1", "8x3", "3RM build", "10x2", "4x6"]
 
 
 @dataclass(frozen=True)
@@ -205,7 +206,6 @@ class LogStats:
     cell_ewma: dict[tuple[str, str], float]               # (pattern, style) -> EWMA as of as_of
     cell_last_seen: dict[tuple[str, str], Date]            # (pattern, style) -> most recent literal exposure
     move_last_seen: dict[str, Date]                        # exercise_id -> most recent date logged
-    heavy_scheme_last_seen: dict[tuple[str, str], Date]    # (pattern, scheme) -> most recent heavy use
 
 
 def build_log_stats(
@@ -256,23 +256,6 @@ def build_log_stats(
                 heavy_key = (pattern, "heavy")
                 increments.setdefault(heavy_key, []).append((d, config.hhr_credit * weight))
 
-    # Scheme staleness is a set-level field (each set carries its own
-    # scheme label), so this pass still needs the raw rows.
-    heavy_scheme_last_seen: dict[tuple[str, str], Date] = {}
-    for s in sets:
-        d = _parse_date(s.date)
-        if d > as_of or s.style != "heavy" or not s.scheme:
-            continue
-        ex = dictionary.exercises.get(s.exercise_id)
-        if ex is None:
-            continue
-        for pattern, weight in ex.E.items():
-            if weight <= 0:
-                continue
-            key = (pattern, s.scheme)
-            if heavy_scheme_last_seen.get(key) is None or d > heavy_scheme_last_seen[key]:
-                heavy_scheme_last_seen[key] = d
-
     cell_ewma: dict[tuple[str, str], float] = {}
     for pattern, style in admissible_cells(dictionary, config):
         tau = tau_cell(pattern, style, config)
@@ -290,7 +273,7 @@ def build_log_stats(
 
     return LogStats(
         as_of=as_of, cell_ewma=cell_ewma, cell_last_seen=cell_last_seen,
-        move_last_seen=move_last_seen, heavy_scheme_last_seen=heavy_scheme_last_seen,
+        move_last_seen=move_last_seen,
     )
 
 
@@ -453,28 +436,6 @@ def advise(
 
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates
-
-
-def suggest_rep_scheme(dictionary: Dictionary, sets: list[db.LoggedSet], day: Date, pattern: str) -> str:
-    """Heavy only. Least-recently-used scheme for this pattern, so e.g. heavy
-    cleans don't get offered a scheme heavy deadlifts just used."""
-    stats = build_log_stats(dictionary, sets, day)
-
-    def last_used(scheme: str) -> Date | None:
-        return stats.heavy_scheme_last_seen.get((pattern, scheme))
-
-    never = [s for s in REP_SCHEMES if last_used(s) is None]
-    if never:
-        return never[0]
-    return min(REP_SCHEMES, key=lambda s: last_used(s))
-
-
-def suggest_rep_count(sets: list[db.LoggedSet], exercise_id: str, style: str = "heavy") -> int | None:
-    """Rolling median reps logged for this exercise at this style. None until logged."""
-    reps = [s.reps for s in sets if s.exercise_id == exercise_id and s.style == style and s.reps is not None]
-    if not reps:
-        return None
-    return round(median(reps))
 
 
 @dataclass

@@ -28,7 +28,7 @@ Layout:
     src/training/simulate.py             synthetic-schedule simulation -> data/
     src/training/webapp/                 FastAPI + Jinja2 app (server-rendered, no SPA)
     tests/                               pytest, all offline
-    docs/                                GUIDE, STATUS, AUDIT, ROADMAP, math.tex
+    docs/                                GUIDE, STATUS, AUDIT, ROADMAP, math.tex (formal spec of advisor.py)
     data/                                webapp.db (gitignored, personal) + simulation output
     tracker.bat                          Windows launcher for the webapp
 
@@ -76,7 +76,7 @@ Things that will otherwise be got wrong:
   discount on the assumption it was physiologically motivated.
 - **`engine` holds only exercises whose `E` row would otherwise be
   empty**: running, rowing, burpee, double-unders, biking, box jump-over,
-  burpee box jump-over (in the current 29-movement dictionary). A jump is
+  burpee box jump-over (in the current 31-movement dictionary). A jump is
   triple extension, but it is not squat *training* — box jumps were
   deliberately zeroed in the pre-prune dictionary and they get engine here
   for the same reason burpees do. That restriction is load-bearing, not
@@ -96,7 +96,7 @@ Things that will otherwise be got wrong:
   `heavy` too, or the pairing doesn't mean anything. **Three deliberate
   exceptions**, all `hhr` with no `heavy`: `kb_swing`, `devils_press`,
   `man_maker`. Flagged in `docs/STATUS.md`; don't "fix" them by
-  adding `heavy` back. Three exceptions out of 29 is the rule showing
+  adding `heavy` back. Three exceptions out of 31 is the rule showing
   strain — it was written for barbell movements and dumbbell conditioning
   movements don't obey it. Treat it as a heuristic, not an invariant, and
   don't add a test asserting it.
@@ -107,13 +107,15 @@ Things that will otherwise be got wrong:
   (`webapp/app.py`'s `REST_ID`), so it never splits a piece into an extra
   block.
 - **The dictionary was pruned from 63 to 16 exercises (v10), then revised
-  to 19, then grown to 29** (plus `rest`, so 30 entries). The review pass
+  to 19, then grown to 31** (plus `rest`, so 32 entries). The review pass
   removed `power_clean`, added `bench_press`/`front_squat`/
   `double_unders`/`biking`, and added then re-removed `kipping_pull_up`.
   The growth pass added ten movements the user actually trains:
   `db_snatch`, `kb_snatch`, `db_thruster`, `db_box_step_over`,
   `devils_press`, `man_maker`, `hspu`, `suitcase_carry`,
-  `burpee_box_jump_over`, `box_jump_over`. That is the intended path —
+  `burpee_box_jump_over`, `box_jump_over`. The light-pull pass then added
+  `ring_row` and `kipping_pull_up`, light-only at `pull: 1.0`, to create the
+  `pull`/`light` cell on purpose. That is the intended path —
   start minimal, add on contact with real logging, never speculatively.
   Exercises cut at any point are in `math_blog`'s git history, not deleted; don't treat
   their absence as an oversight.
@@ -125,9 +127,10 @@ Things that will otherwise be got wrong:
   `brace`/`light`, each served by nothing but man makers at weight `0.3`
   and `0.1`, so both would read chronically behind forever. Check the cell
   count before and after adding a light-admissible exercise with a long
-  `E` row. There is still **no `pull`/`light` cell**; if one is wanted, it
-  should arrive by deliberately adding a light pull (ring row, kipping
-  pull-up), not as a by-product.
+  `E` row. **`pull`/`light` now exists on purpose** (16 cells), served only
+  by `ring_row` and `kipping_pull_up`; `test_pull_light_is_served_by_the_light_pulls_only`
+  pins that. `brace`/`light` still doesn't exist and shouldn't arrive as a
+  by-product either.
 - **`TARGET_RATE = {"light": 1.0, "heavy": 0.75, "hhr": 0.25}`** — raised
   from `{1.35, 0.50, 0.20}` in the same review pass. If you're computing
   capacity or interval numbers by hand, use the current values; anything
@@ -153,10 +156,11 @@ Things that will otherwise be got wrong:
 - `hhr` credits **0.5** toward the heavy cell's own EWMA (decayed on
   heavy's own `τ`), never 1.0, and never updates heavy's
   last-literally-trained date.
-- Scores **rank**; they are not reachable goals, and `score = 0` at target
-  is only exact in the continuous-time limit — the real discrete-event
-  steady state at `MEMORY_K = 2` reads slightly ahead of 0 even when
-  training exactly on target. See `docs/AUDIT.md`.
+- Scores **rank**; they are not reachable goals. Training exactly on
+  target with discrete sessions doesn't hold the score at 0: at
+  `MEMORY_K = 2` it sawtooths between about −0.24 just after a session and
+  +0.26 just before the next is due, averaging +0.01. It is not biased
+  ahead on average. See `docs/math.tex`, "Training exactly on target".
 - Never fit the `E` or `R` matrices from data. They are authored judgment.
 - Unilateral reps are logged **per side**.
 - **The scorer reads only `(date, style, exercise_id)`** and collapses
